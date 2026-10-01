@@ -1,5 +1,5 @@
 // Portföy Defteri — desktop shell (Windows and macOS).
-const { app, BrowserWindow, ipcMain, dialog, shell, session, Tray, Menu, nativeImage, safeStorage, Notification, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, Tray, Menu, nativeImage, safeStorage, Notification, powerMonitor, screen, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -28,7 +28,7 @@ let settingsFile = null, settings = null;
 const DEFAULTS = {
   raporSaati: '08:45', haftaIci: true, raporAktif: false, raporEmail: '',
   smtp: { host: 'smtp.gmail.com', port: 465, secure: true, user: '', from: '', passEnc: '' },
-  acilistaBaslat: false, arkaPlanda: true, sonOtomatikGun: ''
+  acilistaBaslat: false, arkaPlanda: true, sonOtomatikGun: '', tepsiBilgisi: false
 };
 
 /* ---------- settings (non-document preferences; SMTP password encrypted with the OS key store) ---------- */
@@ -73,9 +73,13 @@ function applySettings(patch) {
 
 /* ---------- window ---------- */
 function createWindow(show = true) {
+  // fit the work area: laptops at 125–150 % scaling have as little as ~1280×680 points, and a taller
+  // window would open with its title bar off screen
+  const wa = screen.getPrimaryDisplay().workAreaSize;
+  const width = Math.min(1320, Math.max(420, wa.width - 40)), height = Math.min(900, Math.max(500, wa.height - 40));
   win = new BrowserWindow({
-    width: 1320, height: 900, minWidth: 420, minHeight: 500, show: false,
-    title: 'Portföy Defteri', backgroundColor: '#F3F4F0',
+    width, height, minWidth: Math.min(420, wa.width), minHeight: Math.min(500, wa.height), show: false, center: true,
+    title: 'Portföy Defteri', backgroundColor: nativeTheme.shouldUseDarkColors ? '#0F1412' : '#F3F4F0',
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false, devTools: !app.isPackaged }
   });
@@ -86,7 +90,14 @@ function createWindow(show = true) {
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e, url) => { e.preventDefault(); if (/^https:\/\//.test(url)) shell.openExternal(url); });
   win.on('close', e => {
-    if (!quitting && settings.arkaPlanda) { e.preventDefault(); win.hide(); if (process.platform === 'darwin') app.dock && app.dock.hide(); }
+    if (!quitting && settings.arkaPlanda) {
+      e.preventDefault(); win.hide(); if (process.platform === 'darwin') app.dock && app.dock.hide();
+      // the first time, say where the app went (otherwise it looks like it closed or vanished)
+      if (!settings.tepsiBilgisi && Notification.isSupported()) {
+        settings.tepsiBilgisi = true; saveSettings();
+        new Notification({ title: 'Portföy Defteri arka planda çalışıyor', body: process.platform === 'darwin' ? 'Sabah işini yapabilmek için açık kalır. Menü çubuğundaki simgeden açabilir ya da "Çık" ile kapatabilirsiniz.' : 'Sabah işini yapabilmek için açık kalır. Saatin yanındaki simgeden (gerekirse ^ okuna tıklayın) açabilir ya da "Çık" ile kapatabilirsiniz.' }).show();
+      }
+    }
   });
   win.webContents.on('did-start-loading', () => { sayfaHazir = false; });
   win.on('closed', () => { win = null; sayfaHazir = false; });
@@ -112,11 +123,13 @@ function broadcast(channel, payload) { if (win && !win.isDestroyed()) win.webCon
 
 /* ---------- prices, report, schedule ---------- */
 let refreshing = null;
-function runRefresh(neden) {
+// ekKodlar: codes shown on screen while the ledger is still empty (the sample portfolio on first launch).
+function runRefresh(neden, ekKodlar) {
   if (refreshing) return refreshing;
   broadcast('durum', { calisiyor: true, neden });
-  refreshing = prices.refresh(store, agFetch, UID)
-    .then(r => { broadcast('durum', { calisiyor: false, sonuc: r }); return r; })
+  refreshing = prices.refresh(store, agFetch, UID, ekKodlar)
+    // an automatic run with nothing to fetch stays silent
+    .then(r => { broadcast('durum', { calisiyor: false, sonuc: neden === 'elle' || r.toplam ? r : null }); return r; })
     .catch(e => { broadcast('durum', { calisiyor: false, hata: e.message }); throw e; })
     .finally(() => { refreshing = null; });
   return refreshing;
@@ -148,11 +161,14 @@ async function mailGonder({ subject, html, text }) {
   const tr = nodemailer.createTransport({ host: s.host, port: s.port, secure: !!s.secure, auth: { user: s.user, pass }, connectionTimeout: 15000 });
   await tr.sendMail({ from: s.from || s.user, to: settings.raporEmail, subject, html, text });
 }
-async function sabahGorevi(neden) {
+async function sabahGorevi(neden, { raporuErtele = false } = {}) {
   let r;
-  try { r = await runRefresh(neden); } catch (e) { r = { guncel: 0, toplam: 0, ozet: 'Fiyatlar alınamadı: ' + e.message }; }
+  try { r = await runRefresh(neden); } catch (e) { r = { guncel: 0, toplam: 1, ozet: 'Fiyatlar alınamadı: ' + e.message }; }
   let rapor = 'kapalı';
-  if (settings.raporAktif) {
+  const fiyatYok = r.toplam > 0 && r.guncel === 0;
+  // no prices yet (offline, sources down): wait for the next try instead of mailing yesterday's numbers
+  if (settings.raporAktif && fiyatYok && raporuErtele) rapor = 'ertelendi, fiyatlar alınınca gönderilecek';
+  else if (settings.raporAktif) {
     try { await mailGonder(await raporIste()); rapor = 'gönderildi'; }
     catch (e) { rapor = 'gönderilemedi: ' + e.message; if (Notification.isSupported()) new Notification({ title: 'Portföy Defteri', body: 'Sabah raporu gönderilemedi: ' + e.message }).show(); }
   }
@@ -173,9 +189,13 @@ function zamanlayici() {
   if (settings.sonOtomatikGun === bugunGun()) return;
   if (gorevSuruyor || Date.now() - sonDeneme < 15 * 60 * 1000) return;
   gorevSuruyor = true; sonDeneme = Date.now();
-  sabahGorevi('zamanlanmış').then(r => {
+  // after three hours of retries the day is closed: the report goes out with the last known prices
+  const [sa, dk] = settings.raporSaati.split(':').map(Number);
+  const gec = (d.getHours() * 60 + d.getMinutes()) - (sa * 60 + dk) >= 180;
+  sabahGorevi('zamanlanmış', { raporuErtele: !gec }).then(r => {
     const raporTamam = !settings.raporAktif || r.rapor === 'gönderildi';
-    if (r.guncel > 0 && raporTamam) { settings.sonOtomatikGun = bugunGun(); saveSettings(); }
+    const fiyatTamam = r.guncel > 0 || r.toplam === 0;
+    if ((fiyatTamam && raporTamam) || gec) { settings.sonOtomatikGun = bugunGun(); saveSettings(); }
   }).catch(() => {}).finally(() => { gorevSuruyor = false; });
 }
 
@@ -193,7 +213,7 @@ function registerIpc() {
     fs.writeFileSync(r.filePath, Buffer.from(bytes));
     return { ok: true, path: r.filePath };
   });
-  handle('prices:refresh', () => runRefresh('elle'));
+  handle('prices:refresh', kodlar => runRefresh('elle', Array.isArray(kodlar) ? kodlar.slice(0, 50).filter(k => k && /^[A-Z0-9]{2,8}$/.test(k.kod) && ['Hisse', 'Fon'].includes(k.tip)).map(k => ({ kod: k.kod, tip: k.tip })) : null));
   handle('prices:test', () => prices.testSources(agFetch));
   handle('settings:get', () => publicSettings());
   handle('settings:set', patch => { applySettings(patch); return publicSettings(); });

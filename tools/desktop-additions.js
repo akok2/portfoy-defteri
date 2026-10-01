@@ -83,7 +83,7 @@ async function desktopKaydet(){
 }
 async function desktopEylem(a,t){
   const D=window.desktop; const temiz=e=>String(e&&e.message||e).replace(/^Error invoking remote method '[^']+': (Error: )?/,"");
-  if(a==="fiyat-yenile"){ S.yenileniyor=true; renderChips(); try{ await D.refreshPrices(); }catch(e){ toast("Fiyatlar alınamadı: "+temiz(e)); } return; }
+  if(a==="fiyat-yenile"){ S.yenileniyor=true; renderChips(); try{ await D.refreshPrices(ekranKodlari()); }catch(e){ toast("Fiyatlar alınamadı: "+temiz(e)); } return; }
   if(a==="veri-klasoru"){ D.openDataFolder(); return; }
   if(a==="kaynak-test"){ const box=$("#kaynak-sonuc"); if(box) box.innerHTML=`<p class="small muted">Kaynaklar deneniyor…</p>`;
     try{ const r=await D.testSources(); if(box) box.innerHTML=`<ul class="warnlist">${r.map(x=>`<li class="${x.ok?"ok":"bad"}"><b>${esc(x.ad)}</b><span>${x.ok?esc(x.ornek):"Çalışmıyor: "+esc(x.hata)} · ${x.ms} ms</span></li>`).join("")}</ul>`; }
@@ -95,3 +95,7 @@ async function desktopEylem(a,t){
     try{ const r=await D.runMorning(); msg.className="small ok-msg"; msg.textContent=r.ozet+" Rapor "+r.rapor+"."; }
     catch(e){ msg.className="small err-msg"; msg.textContent=temiz(e); } t.disabled=false; return; }
 }
+
+// While the sample portfolio is shown (nothing saved yet) the price module has no codes of its own: pass the ones on screen.
+function ekranKodlari(){ if(!S.demo) return null; const m=new Map(); for(const h of S.defter.hisseler||[]) m.set(h.kod,h.tip==="Fon"?"Fon":"Hisse"); for(const x of S.defter.islemler||[]) if(!m.has(x.kod)) m.set(x.kod,"Hisse"); return [...m].map(([kod,tip])=>({kod,tip})); }
+function ornekFiyatlari(){ if(!DESKTOP||!S.demo) return; const v=(S.piyasa&&S.piyasa.veriler)||{}; const k=ekranKodlari()||[]; if(k.length&&k.some(x=>!v[x.kod])) window.desktop.refreshPrices(k).catch(()=>{}); }

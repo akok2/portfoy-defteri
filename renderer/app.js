@@ -227,10 +227,17 @@ async function baslat(ornekle){
 /* ---------- render ---------- */
 const TABS=[["ozet","Özet"],["poz","Pozisyonlar"],["islem","İşlemler"],["nakit","Nakit"],["vergi","Vergi"],["rapor","Günlük rapor"],["ayar","Ayarlar ve gizlilik"]];
 function render(){ if(!S.calc) S.calc=hesapla(S.defter); renderChips(); renderBanner(); renderTabs(); renderMain(); renderDrawer(); }
+// Prices can arrive at any moment (background refresh). Never redraw a form the viewer is filling in: those parts wait for the next redraw.
+function duzenleniyor(kok){ const k=$(kok); if(!k) return false; const a=document.activeElement;
+  if(a&&k.contains(a)&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)&&a.closest("form")) return true;
+  return [...k.querySelectorAll("form input,form textarea")].some(i=>!/checkbox|radio|hidden|file/.test(i.type)&&i.value!==i.defaultValue)
+    ||[...k.querySelectorAll("form select")].some(x=>[...x.options].some(o=>o.selected!==o.defaultSelected)); }
+function arkaPlanRender(){ if(!S.calc) S.calc=hesapla(S.defter); renderChips(); renderBanner(); renderTabs(); if(!duzenleniyor("#main")) renderMain(); if(!duzenleniyor("#overlay")) renderDrawer(); }
 function renderChips(){
   const f=S.piyasa?.guncelleme; const parts=[];
   const sorun=S.calc?Object.values(S.calc.poz).filter(p=>p.lot>0&&p.f&&!p.f.elle&&(p.f.eski||p.f.dogrulama==="uyusmazlik"||p.f.dogrulama==="supheli")).length:0;
   if(f) parts.push(`<span class="chip ${sorun?"warn":"ok"}"><span class="dot"></span>Fiyatlar: ${esc(f)}${sorun?` · ${sorun} fiyat kontrol bekliyor`:""}</span>`);
+  else if(!S.defter.islemler.length&&!S.defter.hisseler.length) parts.push(`<span class="chip"><span class="dot"></span>Henüz hisse ya da fon yok</span>`);
   else parts.push(`<span class="chip warn"><span class="dot"></span>Fiyat bekleniyor</span>`);
   if(DESKTOP){ const ds=S.ds||{};
     parts.push(`<span class="chip"><span class="dot"></span>Otomatik: ${ds.haftaIci===false?"her gün":"hafta içi"} ${esc(ds.raporSaati||"08:45")}</span>`);
@@ -705,21 +712,33 @@ function tarihIso(v){
 const metin=v=>String(v??"").trim();
 
 /* ---------- import: read a file into a package first, show it, apply only when the viewer confirms ---------- */
-// Transactions: this page's own "İşlemler" sheet (ISLEM column) or the old program's DATA layout (ALINAN_LOT / SATILAN_LOT …).
+// Transactions: this page's own "İşlemler" sheet (ISLEM column), the old program's DATA layout (ALINAN_LOT / SATILAN_LOT …)
+// or any table with Hisse/Kod + Tarih (+ İşlem türü, Lot/Adet, Fiyat, Komisyon) columns. Header names are matched loosely.
+const BASLIK={HISSE:["HISSE","KOD","HISSE_KODU","SEMBOL","FON","FON_KODU","MENKUL","ENSTRUMAN"],TARIH:["TARIH","ISLEM_TARIHI"],
+  ISLEM:["ISLEM","ISLEM_TURU","ISLEM_TIPI","TUR","TIP","YON","ALIS/SATIS","ALIS_SATIS"],LOT:["LOT","ADET","MIKTAR","PAY","PAY_ADEDI","NOMINAL"],
+  FIYAT:["FIYAT","BIRIM_FIYAT","ISLEM_FIYATI"],KOMISYON:["KOMISYON","KOMISYON_TUTARI","MASRAF"],TEMETTU:["TEMETTU","TEMETTU_TUTARI","KAR_PAYI"],
+  TUTAR:["TUTAR","ISLEM_TUTARI"],ARACI_KURUM:["ARACI_KURUM","KURUM"],ISLEM_GRUBU:["ISLEM_GRUBU","GRUP"],NOT:["NOT","ACIKLAMA"]};
+const normB=h=>normH(h).replace(/\([^)]*\)/g,"").replace(/[^A-Z0-9_\/]/g,"_").replace(/_+/g,"_").replace(/^_|_$/g,"");
+// TEFAS fund codes have three characters; BIST share tickers have four or more.
+const tahminTip=k=>/^[A-Z][A-Z0-9]{2}$/.test(k)?"Fon":"Hisse";
+function turNorm(v){ const t=metin(v); if(TYPES.includes(t)) return t; const n=normB(t);
+  if(["ALIS","AL","ALIM","BUY","A"].includes(n)) return "Alış"; if(["SATIS","SAT","SATIM","SELL","S"].includes(n)) return "Satış";
+  if(["BEDELSIZ","BEDELSIZ_PAY","BONUS"].includes(n)) return "Bedelsiz"; if(["TEMETTU","KAR_PAYI","TEMETTU_GELIRI","DIVIDEND"].includes(n)) return "Temettü"; return ""; }
 function islemOku(rows){
-  const hi=rows.findIndex(r=>r.some(c=>normH(c)==="HISSE")); if(hi<0) return null;
-  const H=rows[hi].map(normH); const ix=n=>H.indexOf(n); if(ix("TARIH")<0) return null;
-  const ikinci=H.lastIndexOf("HISSE")!==ix("HISSE")?H.lastIndexOf("HISSE"):-1; // old program keeps a helper stock list in a second HISSE column
+  const var_=(r,n)=>r.some(c=>BASLIK[n].includes(normB(c)));
+  const hi=rows.findIndex(r=>var_(r,"HISSE")&&var_(r,"TARIH")); if(hi<0) return null;
+  const H=rows[hi].map(normB); const ix=n=>BASLIK[n]?H.findIndex(h=>BASLIK[n].includes(h)):H.indexOf(n);
+  const hk=ix("HISSE"), ikinci=H.findIndex((h,i)=>i>hk&&h==="HISSE"); // old program keeps a helper stock list in a second HISSE column
   const out={islemler:[],izleme:new Set(),atlanan:0};
   for(const r of rows.slice(hi+1)){
-    if(ikinci>=0){ const k=metin(r[ikinci]).toUpperCase(); if(KOD_RE.test(k)) out.izleme.add(k); }
+    if(ikinci>=0){ const k=metin(r[ikinci]).toUpperCase(); if(KOD_RE.test(k)&&/[A-Z]/.test(k)) out.izleme.add(k); }
     const g=k=>ix(k)>=0?r[ix(k)]:"";
     const kod=metin(g("HISSE")).toUpperCase(); if(!kod||kod==="0") continue;
-    if(!KOD_RE.test(kod)){ out.atlanan++; continue; }
+    if(!KOD_RE.test(kod)||!/[A-Z]/.test(kod)){ out.atlanan++; continue; }
     const tarih=tarihIso(g("TARIH")); if(!tarih){ out.atlanan++; continue; }
     const base={no:parseInt(g("ISLEM_NO"),10)||null,kod,tarih,komisyon:parseNum(g("KOMISYON"))||0,grup:metin(g("ISLEM_GRUBU")).replace(/^0$/,""),kurum:metin(g("ARACI_KURUM")).replace(/^0$/,""),not:metin(g("NOT"))};
-    const tur=metin(g("ISLEM"));
-    if(TYPES.includes(tur)){ out.islemler.push(Object.assign(base,tur==="Temettü"?{tur,lot:0,fiyat:0,komisyon:0,tutar:parseNum(g("TEMETTU"))||0}:{tur,lot:parseNum(g("LOT"))||0,fiyat:tur==="Bedelsiz"?0:(parseNum(g("FIYAT"))||0)})); continue; }
+    const tur=turNorm(g("ISLEM"));
+    if(tur){ out.islemler.push(Object.assign(base,tur==="Temettü"?{tur,lot:0,fiyat:0,komisyon:0,tutar:parseNum(g("TEMETTU"))||parseNum(g("TUTAR"))||0}:{tur,lot:parseNum(g("LOT"))||0,fiyat:tur==="Bedelsiz"?0:(parseNum(g("FIYAT"))||0)})); continue; }
     const al=parseNum(g("ALINAN_LOT")), sat=parseNum(g("SATILAN_LOT")), af=parseNum(g("ALIS_FIYATI")), sf=parseNum(g("SATIS_FIYATI")), tem=parseNum(g("TEMETTU"));
     if(al>0) out.islemler.push(Object.assign({},base,af>0?{tur:"Alış",lot:al,fiyat:af}:{tur:"Bedelsiz",lot:al,fiyat:0,komisyon:0}));
     if(sat>0) out.islemler.push(Object.assign({},base,{tur:"Satış",lot:sat,fiyat:sf||0},al>0?{komisyon:0}:{}));
@@ -791,8 +810,8 @@ function dosyaOku(file){
         if(ad("BANKA_ISLEMLERI")){ const b=bankaOku(tam(ad("BANKA_ISLEMLERI"))); P.nakit.push(...b.nakit); P.kurumlar.push(...b.kurumlar); }
         if(ad("NAKIT")) P.nakit.push(...nakitOku(tam(ad("NAKIT"))));
         if(ad("AYARLAR")){ const a=ayarOku(tam(ad("AYARLAR"))); P.hisseler=a.hisseler; P.kurumlar.push(...a.kurumlar); if(Object.keys(a.ayarlar).length) P.ayarlar=a.ayarlar; }
-        P.kaynak=ad("BANKA_ISLEMLERI")||ad("ANA_SAYFA")?"Eski Excel takip programı":ad("AYARLAR")||ad("ISLEMLER")?"Portföy Defteri'nden indirilmiş Excel":"Excel tablosu";
-        if(!isl&&!P.nakit.length&&!P.hisseler.length&&!P.kurumlar.length) throw new Error("Dosyada tanınan bir sayfa yok. İşlemler için HISSE ve TARIH sütunları gerekli.");
+        P.kaynak=ad("BANKA_ISLEMLERI")||ad("ANA_SAYFA")?"Eski Excel takip programı":ad("AYARLAR")?"Portföy Defteri'nden indirilmiş Excel":"Excel tablosu";
+        if(!isl&&!P.nakit.length&&!P.hisseler.length&&!P.kurumlar.length) throw new Error("Dosyada tanınan bir sayfa yok. İşlem tablosunun başlık satırında en az Hisse (ya da Kod) ve Tarih sütunları olmalı; İşlem türü (Alış/Satış), Lot (ya da Adet), Fiyat ve Komisyon sütunları da okunur.");
       } else {
         const txt=String(rd.result).replace(/^﻿/,""); const lines=txt.split(/\r?\n/).filter(l=>l.trim());
         if(!lines.length) throw new Error("Dosya boş.");
@@ -810,7 +829,7 @@ async function dosyaSec(file){
   const inp=$("#xl-in"); if(inp) inp.value="";
   if(!file) return;
   if(S.readOnly){ toast("Bu sayfada düzenleme yetkin yok."); return; }
-  try{ S.ice=await dosyaOku(file); S.iceMod=(!S.demo&&(S.defter.islemler.length||S.defter.hisseler.length))?"ekle":"degistir"; S.iceIzleme=true; renderModal(); }
+  try{ S.ice=await dosyaOku(file); S.iceMod=(!S.demo&&(S.defter.islemler.length||S.defter.hisseler.length))?"ekle":"degistir"; S.iceIzleme=S.ice.islemler.length>0; renderModal(); }
   catch(e){ S.ice={hata:e.message,dosya:file.name}; renderModal(); }
 }
 const islemImza=x=>[x.kod,x.tarih,x.tur,+x.lot||0,+x.fiyat||0,+x.tutar||0].join("|");
@@ -821,6 +840,7 @@ function renderModal(){
   const kayitli=!S.demo&&(S.defter.islemler.length||S.defter.hisseler.length||S.defter.nakit.length);
   const varIsl=new Map(); for(const x of S.defter.islemler){ const k=islemImza(x); varIsl.set(k,(varIsl.get(k)||0)+1); } const tekrar=S.iceMod==="ekle"&&!S.demo?P.islemler.filter(x=>{ const k=islemImza(x); if(varIsl.get(k)>0){ varIsl.set(k,varIsl.get(k)-1); return true; } return false; }).length:0;
   const kodlar=[...new Set(P.islemler.map(x=>x.kod))];
+  const bos=!P.islemler.length&&!P.nakit.length; if(bos&&kayitli) S.iceMod="ekle";
   const ornek=P.islemler.slice(0,8);
   const pc={"Alış":"buy","Satış":"sell","Bedelsiz":"bonus","Temettü":"div"};
   const li=(n,t)=>n?`<li><b class="num">${n}</b> ${t}</li>`:"";
@@ -829,22 +849,23 @@ function renderModal(){
     <p class="small muted">${esc(P.dosya)} · ${esc(P.kaynak)} · dosya bu cihazda okundu, hiçbir yere gönderilmedi</p>
     <div><h3>Dosyada bulunanlar</h3><ul class="prose small" style="margin:6px 0 0">
       ${li(P.islemler.length,"işlem"+(kodlar.length?` (${kodlar.length} farklı kod: ${esc(kodlar.slice(0,12).join(", "))}${kodlar.length>12?"…":""})`:""))}
+      ${(()=>{ const f=kodlar.filter(k=>tahminTip(k)==="Fon"&&!P.hisseler.some(h=>h.kod===k)&&!S.defter.hisseler.some(h=>h.kod===k)); return f.length?`<li>${esc(f.join(", "))} üç harfli olduğu için <b>TEFAS fonu</b> olarak eklenecek. Yanlışsa sonra hisse detayından değiştirebilirsin.</li>`:""; })()}
       ${li(P.nakit.length,"para yatırma / çekme / kesinti hareketi")}
       ${li(P.kurumlar.length,"aracı kurum ve komisyon tablosu ("+esc(P.kurumlar.map(k=>k.ad).join(", "))+")")}
       ${li(P.hisseler.length,"kayıtlı hisse / fon ayarı (hedef, stop, fon vergi sınıfı)")}
       ${P.ayarlar?`<li>Hesaplama ayarları (maliyet yöntemi, beyan sınırı)</li>`:""}
-      ${!P.islemler.length&&!P.nakit.length?`<li>Dosyada işlem kaydı yok.</li>`:""}
-      ${P.atlanan?`<li class="down">${P.atlanan} satır okunamadı (geçersiz kod ya da tarih) ve alınmayacak.</li>`:""}
+      ${P.atlanan?`<li class="down">${P.atlanan} satır okunamadı (kod, tarih ya da işlem türü anlaşılamadı) ve alınmayacak.</li>`:""}
     </ul></div>
+    ${!P.islemler.length?`<div class="banner err"><p><b>Bu dosyada alış/satış kaydı yok, bu yüzden yükleyince hisse görünmez.</b> ${/Eski Excel/.test(P.kaynak)?"Eski programda işlemler DATA sayfasında tutulur; bu dosyanın DATA sayfası boş (programın boş şablonu olabilir).":"İşlem tablosunun başlık satırında en az Hisse (ya da Kod) ve Tarih sütunları olmalı; İşlem türü (Alış/Satış), Lot (ya da Adet), Fiyat ve Komisyon sütunları da okunur."}</p></div>`:""}
     ${P.izleme.length?`<label class="check" for="ice-izleme"><input type="checkbox" id="ice-izleme" ${S.iceIzleme?"checked":""}><span>İşlemi olmayan ${P.izleme.length} kodu izleme listesine ekle <span class="muted small">(${esc(P.izleme.slice(0,10).join(", "))}${P.izleme.length>10?"…":""})</span></span></label>`:""}
     ${ornek.length?`<div class="tbl-wrap"><table><thead><tr><th>Tarih</th><th>Kod</th><th>İşlem</th><th class="n">Lot</th><th class="n">Fiyat</th><th class="n">Komisyon</th><th>Kurum</th></tr></thead><tbody>${ornek.map(x=>`<tr><td class="num">${fmtDate(x.tarih)}</td><td class="num">${esc(x.kod)}</td><td><span class="pill ${pc[x.tur]}">${esc(x.tur)}</span></td><td class="n num">${x.tur==="Temettü"?"—":LOT(x.lot)}</td><td class="n num">${x.tur==="Temettü"?TL(x.tutar):x.fiyat?PX(x.fiyat):"—"}</td><td class="n num">${x.komisyon?nf2.format(x.komisyon):"—"}</td><td>${esc(x.kurum||"—")}</td></tr>`).join("")}</tbody></table></div>${P.islemler.length>8?`<p class="small muted">İlk 8 işlem gösteriliyor.</p>`:""}`:""}
-    <div><h3>Nasıl devam edilsin?</h3>
-      ${kayitli?`<div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+    ${bos&&!P.kurumlar.length&&!P.hisseler.length&&!P.ayarlar&&!P.izleme.length?`<div class="row"><button class="btn" data-act="ice-kapat-btn">Kapat</button><label class="btn primary" for="xl-in">Başka dosya seç</label></div>`:`<div><h3>Nasıl devam edilsin?</h3>
+      ${kayitli&&!bos?`<div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
         <label class="check" for="ice-ekle"><input type="radio" name="ice-mod" id="ice-ekle" value="ekle" ${S.iceMod==="ekle"?"checked":""}><span><b>Mevcut defterime ekle.</b> Defterinde zaten olan işlemler tekrar eklenmez${tekrar?` (${tekrar} işlem zaten var, atlanacak)`:""}.</span></label>
         <label class="check" for="ice-degistir"><input type="radio" name="ice-mod" id="ice-degistir" value="degistir" ${S.iceMod==="degistir"?"checked":""}><span><b>Defterimi bu dosyadaki bilgilerle değiştir.</b> Şu anki işlemlerin, nakit hareketlerin ve hisse listen silinir; dosyadakilerle yeniden başlar.</span></label></div>`
-      :`<p class="small">Defterin bu dosyadaki bilgilerle başlatılacak. Sonradan istediğin gibi düzenleyebilirsin.</p>`}
+      :bos?`<p class="small">${kayitli?"Defterindeki işlemlere dokunulmaz; yalnızca yukarıdakiler eklenir.":"Yalnızca yukarıdakiler alınır. Alışlarını sonra İşlemler sekmesinden girebilirsin."}</p>`:`<p class="small">Defterin bu dosyadaki bilgilerle başlatılacak. Sonradan istediğin gibi düzenleyebilirsin.</p>`}
     </div>
-    <div class="row"><button class="btn primary" data-act="ice-uygula">${kayitli?(S.iceMod==="degistir"?"Defterimi değiştir":"Defterime ekle"):"Bu bilgilerle başla"}</button><button class="btn" data-act="ice-kapat-btn">Vazgeç</button><span class="small muted">Yüklemeden sonra her şeyi Excel olarak geri indirebilirsin.</span></div>
+    <div class="row"><button class="btn primary" data-act="ice-uygula">${bos?(kayitli?"Defterime ekle":"Bunları al ve başla"):kayitli?(S.iceMod==="degistir"?"Defterimi değiştir":"Defterime ekle"):"Bu bilgilerle başla"}</button><button class="btn" data-act="ice-kapat-btn">Vazgeç</button><span class="small muted">Yüklemeden sonra her şeyi Excel olarak geri indirebilirsin.</span></div>`}
   </div></div>`;
 }
 async function iceUygula(btn){
@@ -873,7 +894,7 @@ async function iceUygula(btn){
   for(const n of P.nakit){ const k=nakitImza(n); if(varNakit.get(k)>0){ varNakit.set(k,varNakit.get(k)-1); continue; } d.nakit.push(Object.assign({id:uid6()},n)); nEk++; }
   // stocks: saved settings, then every traded code, then the optional watch list
   const yeniKod=[];
-  const hisseEkle=h=>{ const j=d.hisseler.findIndex(x=>x.kod===h.kod); if(j>=0){ if(h.tip) Object.assign(d.hisseler[j],Object.fromEntries(Object.entries(h).filter(([,v])=>v!=null&&v!==""))); } else { d.hisseler.push(Object.assign({tip:"Hisse",ad:""},h)); yeniKod.push(h); } };
+  const hisseEkle=h=>{ const j=d.hisseler.findIndex(x=>x.kod===h.kod); if(j>=0){ if(h.tip) Object.assign(d.hisseler[j],Object.fromEntries(Object.entries(h).filter(([,v])=>v!=null&&v!==""))); } else { d.hisseler.push(Object.assign({tip:tahminTip(h.kod),ad:""},h)); yeniKod.push(h); } };
   P.hisseler.forEach(hisseEkle);
   for(const k of new Set(d.islemler.map(x=>x.kod))) if(!d.hisseler.some(h=>h.kod===k)) hisseEkle({kod:k});
   const izlemeAl=$("#ice-izleme")?$("#ice-izleme").checked:S.iceIzleme;
@@ -972,7 +993,7 @@ async function desktopKaydet(){
 }
 async function desktopEylem(a,t){
   const D=window.desktop; const temiz=e=>String(e&&e.message||e).replace(/^Error invoking remote method '[^']+': (Error: )?/,"");
-  if(a==="fiyat-yenile"){ S.yenileniyor=true; renderChips(); try{ await D.refreshPrices(); }catch(e){ toast("Fiyatlar alınamadı: "+temiz(e)); } return; }
+  if(a==="fiyat-yenile"){ S.yenileniyor=true; renderChips(); try{ await D.refreshPrices(ekranKodlari()); }catch(e){ toast("Fiyatlar alınamadı: "+temiz(e)); } return; }
   if(a==="veri-klasoru"){ D.openDataFolder(); return; }
   if(a==="kaynak-test"){ const box=$("#kaynak-sonuc"); if(box) box.innerHTML=`<p class="small muted">Kaynaklar deneniyor…</p>`;
     try{ const r=await D.testSources(); if(box) box.innerHTML=`<ul class="warnlist">${r.map(x=>`<li class="${x.ok?"ok":"bad"}"><b>${esc(x.ad)}</b><span>${x.ok?esc(x.ornek):"Çalışmıyor: "+esc(x.hata)} · ${x.ms} ms</span></li>`).join("")}</ul>`; }
@@ -984,6 +1005,10 @@ async function desktopEylem(a,t){
     try{ const r=await D.runMorning(); msg.className="small ok-msg"; msg.textContent=r.ozet+" Rapor "+r.rapor+"."; }
     catch(e){ msg.className="small err-msg"; msg.textContent=temiz(e); } t.disabled=false; return; }
 }
+
+// While the sample portfolio is shown (nothing saved yet) the price module has no codes of its own: pass the ones on screen.
+function ekranKodlari(){ if(!S.demo) return null; const m=new Map(); for(const h of S.defter.hisseler||[]) m.set(h.kod,h.tip==="Fon"?"Fon":"Hisse"); for(const x of S.defter.islemler||[]) if(!m.has(x.kod)) m.set(x.kod,"Hisse"); return [...m].map(([kod,tip])=>({kod,tip})); }
+function ornekFiyatlari(){ if(!DESKTOP||!S.demo) return; const v=(S.piyasa&&S.piyasa.veriler)||{}; const k=ekranKodlari()||[]; if(k.length&&k.some(x=>!v[x.kod])) window.desktop.refreshPrices(k).catch(()=>{}); }
 
 /* ---------- boot ---------- */
 S.calc=hesapla(S.defter); render(); syncIslemForm();
@@ -997,10 +1022,11 @@ async function boot(){
   if(DESKTOP){ try{ S.ds=await window.desktop.getSettings(); }catch(e){}
     if(S.ds&&S.ds.kurtarma){ S.err=S.ds.kurtarma; }
     window.desktop.onStatus(v=>{ if(v.kayitHatasi){ S.err="Değişiklikler diske yazılamadı: "+v.kayitHatasi+". Disk dolu ya da klasör kilitli olabilir; uygulama tekrar deneyecek."; renderBanner(); return; } S.yenileniyor=!!v.calisiyor; if(v.sonuc) toast(v.sonuc.ozet); if(v.hata) toast("Fiyatlar alınamadı: "+v.hata); renderChips(); });
-    window.desktop.onReportRequest(async()=>raporOlustur()); }
+    window.desktop.onReportRequest(async()=>raporOlustur());
+    setTimeout(ornekFiyatlari,2500); }
   S.uid=user?await user.id():null;
   const w=user?await user.can("data.write"):null; if(w===false){} // own subtree writes are decided by the store
-  db.doc("piyasa/fiyatlar").onSnapshot(s=>{ S.piyasaGeldi=true; S.piyasa=s.exists?s.data():{veriler:{}}; S.calc=hesapla(S.defter); render(); },e=>console.warn(e));
+  db.doc("piyasa/fiyatlar").onSnapshot(s=>{ S.piyasaGeldi=true; S.piyasa=s.exists?s.data():{veriler:{}}; S.calc=hesapla(S.defter); arkaPlanRender(); },e=>console.warn(e));
   db.doc("piyasa/gecmis").onSnapshot(s=>{ S.gecmis=s.exists?s.data():{veriler:{}}; if(S.detay) renderDrawer(); },e=>console.warn(e));
   db.doc("piyasa/durum").onSnapshot(s=>{ S.durum=s.exists?s.data():null; if(S.tab==="rapor") renderMain(); },e=>console.warn(e));
   if(!S.uid){ render(); return; }

@@ -65,7 +65,7 @@ async function tradingview(http, kod) {
   const j = await http('https://scanner.tradingview.com/turkey/scan', {
     method: 'POST',
     body: JSON.stringify({ symbols: { tickers: [`BIST:${kod}`], query: { types: [] } }, columns: ['close', 'description', 'change'] }),
-    headers: { 'Content-Type': 'application/json', Origin: 'https://www.tradingview.com', Referer: 'https://www.tradingview.com/' }
+    headers: { 'Content-Type': 'application/json' } // no Origin/Referer: Chromium's network stack rejects a cross-site Origin (net::ERR_FAILED)
   });
   const row = j && Array.isArray(j.data) && j.data[0];
   const d = row && row.d;
@@ -177,7 +177,8 @@ async function pool(items, n, fn) {
   return out;
 }
 
-const HISSE_KAYNAKLARI = [['Yahoo', yahoo], ['Bigpara', bigpara], ['TradingView', tradingview], ['İş Yatırım', isyatirim]];
+// Bigpara answers HTTP 403 to these requests (seen from Türkiye and abroad), so it is no longer queried.
+const HISSE_KAYNAKLARI = [['Yahoo', yahoo], ['TradingView', tradingview], ['İş Yatırım', isyatirim]];
 async function stockQuote(http, kod) {
   const res = await Promise.allSettled(HISSE_KAYNAKLARI.map(([, fn]) => fn(http, kod)));
   const ok = res.filter(r => r.status === 'fulfilled').map(r => r.value);
@@ -206,11 +207,23 @@ async function fundQuote(http, kod) {
 }
 
 // Refresh every code in the ledger. `store` is the local Store.
-async function refresh(store, fetchImpl, uid = 'local') {
+async function refresh(store, fetchImpl, uid = 'local', ekKodlar = null) {
   const http = makeHttp(fetchImpl);
   const defter = store.get(`data/users/${uid}/defter`) || { hisseler: [] };
-  const kodlar = [...new Map((defter.hisseler || []).filter(h => KOD_RE.test(h.kod)).map(h => [h.kod, h.tip === 'Fon' ? 'Fon' : 'Hisse'])).entries()];
-  const sonuc = await pool(kodlar, 4, ([kod, tip]) => tip === 'Fon' ? fundQuote(http, kod) : stockQuote(http, kod));
+  let liste = (defter.hisseler || []);
+  // empty ledger: use the codes the screen is showing (sample portfolio), if any were passed
+  if (!liste.length && Array.isArray(ekKodlar)) liste = ekKodlar;
+  const kodlar = [...new Map(liste.filter(h => h && KOD_RE.test(h.kod)).map(h => [h.kod, h.tip === 'Fon' ? 'Fon' : 'Hisse'])).entries()];
+  // If a code was filed under the wrong type (for example a fund imported as a share), try the other kind before giving up.
+  const sonuc = await pool(kodlar, 4, async ([kod, tip]) => {
+    const q = tip === 'Fon' ? await fundQuote(http, kod) : await stockQuote(http, kod);
+    if (!q.hata) return q;
+    // only where the code's shape fits the other kind: TEFAS codes have 3 characters, BIST tickers 4 or more
+    const digerUygun = tip === 'Fon' ? kod.length >= 4 : kod.length === 3;
+    if (!digerUygun) return q;
+    const diger = tip === 'Fon' ? await stockQuote(http, kod) : await fundQuote(http, kod);
+    return diger.hata ? q : { ...diger, uyari: `${kod} ${tip === 'Fon' ? 'fon' : 'hisse'} olarak kayıtlı ama ${tip === 'Fon' ? 'hisse' : 'fon'} fiyatı bulundu; hisse detayından türünü düzeltin.` };
+  });
   let doviz = null, dovizHata = null;
   try { doviz = await tcmb(http); } catch (e) { dovizHata = e.message; }
 
@@ -236,7 +249,7 @@ async function refresh(store, fetchImpl, uid = 'local') {
   const fiyatDoc = { guncelleme: guncel ? t.tr : (eski.guncelleme || null), veriler, doviz: doviz || eski.doviz || null };
   store.set('piyasa/fiyatlar', fiyatDoc);
   store.set('piyasa/gecmis', { veriler: gecmis });
-  const ozet = `${guncel}/${kodlar.length} fiyat güncellendi (${iki} iki kaynakla doğrulandı)` + (basarisiz.length ? `. Güncellenemeyen: ${basarisiz.join(', ')}` : '') + (dovizHata ? `. Döviz kuru alınamadı (${dovizHata})` : '');
+  const ozet = !kodlar.length ? 'Defterde fiyatı çekilecek hisse ya da fon yok. Önce bir alış girin ya da Excel\'den yükleyin.' : `${guncel}/${kodlar.length} fiyat güncellendi (${iki} iki kaynakla doğrulandı)` + (basarisiz.length ? `. Güncellenemeyen: ${basarisiz.join(', ')}` : '') + (dovizHata ? `. Döviz kuru alınamadı (${dovizHata})` : '');
   const durum = { ...(store.get('piyasa/durum') || {}), sonCalisma: t.tr, ozet, ayrinti: sonuc.filter(s => s.hata || s.uyari).map(s => `${s.kod}: ${s.hata || s.uyari}`).slice(0, 60) };
   store.set('piyasa/durum', durum);
   return { guncel, toplam: kodlar.length, iki, basarisiz, dovizHata, ozet };
@@ -248,7 +261,6 @@ async function testSources(fetchImpl) {
   const deneme = async (ad, fn) => { const t0 = Date.now(); try { const r = await fn(); return { ad, ok: true, ms: Date.now() - t0, ornek: r }; } catch (e) { return { ad, ok: false, ms: Date.now() - t0, hata: e.message }; } };
   return Promise.all([
     deneme('Yahoo Finance (hisse)', async () => { const r = await yahoo(http, 'THYAO'); return `THYAO ${r.fiyat} · ${r.tarih} · ${r.gecmis.length} günlük geçmiş`; }),
-    deneme('Bigpara (hisse)', async () => { const r = await bigpara(http, 'THYAO'); return `THYAO ${r.fiyat}${r.tarih ? ' · ' + r.tarih : ''}`; }),
     deneme('TradingView (hisse)', async () => { const r = await tradingview(http, 'THYAO'); return `THYAO ${r.fiyat}`; }),
     deneme('İş Yatırım (hisse)', async () => { const r = await isyatirim(http, 'THYAO'); return `THYAO ${r.fiyat}${r.tarih ? ' · ' + r.tarih : ''}`; }),
     deneme('TEFAS (fon)', async () => { const r = await tefas(http, 'AFT'); return `AFT ${r.fiyat} · ${r.tarih}`; }),

@@ -37,7 +37,8 @@ js = rep(js, '  S.connected=true;\n', '''  S.connected=true;
   if(DESKTOP){ try{ S.ds=await window.desktop.getSettings(); }catch(e){}
     if(S.ds&&S.ds.kurtarma){ S.err=S.ds.kurtarma; }
     window.desktop.onStatus(v=>{ if(v.kayitHatasi){ S.err="Değişiklikler diske yazılamadı: "+v.kayitHatasi+". Disk dolu ya da klasör kilitli olabilir; uygulama tekrar deneyecek."; renderBanner(); return; } S.yenileniyor=!!v.calisiyor; if(v.sonuc) toast(v.sonuc.ozet); if(v.hata) toast("Fiyatlar alınamadı: "+v.hata); renderChips(); });
-    window.desktop.onReportRequest(async()=>raporOlustur()); }
+    window.desktop.onReportRequest(async()=>raporOlustur());
+    setTimeout(ornekFiyatlari,2500); }
 ''')
 js = rep(js, '/* ---------- boot ---------- */', add + '\n/* ---------- boot ---------- */')
 js = rep(js, 'db.doc("piyasa/fiyatlar").onSnapshot(s=>{ ', 'db.doc("piyasa/fiyatlar").onSnapshot(s=>{ S.piyasaGeldi=true; ')
@@ -45,7 +46,10 @@ js = rep(js, '  db.doc("data/users/"+S.uid+"/defter").onSnapshot(s=>{\n', '  db.
 
 style = rep(style, '.chip .dot{', '.chip.btnchip{cursor:pointer;color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:var(--accent-soft);font:inherit;font-size:12.5px}\n.chip.btnchip[disabled]{opacity:.7;cursor:progress}\ndetails summary{cursor:pointer}\n.chip .dot{')
 # system fonts only: nothing is loaded from the internet
-style = style.replace('"Bricolage Grotesque",', '').replace('"IBM Plex Sans",', '"Segoe UI Variable","Segoe UI",').replace('"IBM Plex Mono",', '"Cascadia Mono","SF Mono",')
+style = style.replace('"Bricolage Grotesque",', '').replace('"IBM Plex Sans",', '"Segoe UI Variable","Segoe UI",')
+# numbers use the system sans with tabular figures: the monospace fallback on macOS (Menlo) looked heavy and uneven
+style = re.sub(r'--f-mono:[^;]*;', '--f-mono:system-ui,-apple-system,"Segoe UI Variable","Segoe UI",sans-serif;', style)
+style = rep(style, 'body{background:var(--ground);', 'body{font-variant-numeric:tabular-nums;background:var(--ground);')
 
 html = f'''<!doctype html>
 <html lang="tr">

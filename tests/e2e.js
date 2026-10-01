@@ -103,6 +103,12 @@ async function main() {
   kontrol(await w.title() === 'Portföy Defteri', 'pencere başlığı');
   kontrol(/örnek veriler/i.test(await metin(w, '#banner')), 'ilk açılışta örnek veri uyarısı görünüyor');
   kontrol(!/SASA|MOGAN|OSTIM|YKBNK/.test(await w.content()), 'kişisel örnek veri yok');
+  for (let i = 0; i < 20 && !/Fiyatlar: \d/.test(await metin(w, '#chips')); i++) await bekle(500);
+  kontrol(/Fiyatlar: \d/.test(await metin(w, '#chips')), 'ilk açılışta örnek hisselerin fiyatları kendiliğinden geliyor');
+  const bosluk = await w.evaluate(() => { const c = [...document.querySelector('#main').children]; return c.slice(1).map((e, i) => Math.round(e.getBoundingClientRect().top - c[i].getBoundingClientRect().bottom)); });
+  kontrol(bosluk.length >= 2 && bosluk.every(x => x >= 12), 'özet ekranındaki bölümler arasında boşluk var (' + bosluk.join(', ') + ' px)');
+  const yazi = await w.evaluate(() => getComputedStyle(document.querySelector('.kpi .v')).fontFamily);
+  kontrol(!/mono|Menlo|Courier|Consolas/i.test(yazi), 'rakamlar sistem yazı tipiyle gösteriliyor (' + yazi + ')');
   for (const t of ['ozet', 'poz', 'islem', 'nakit', 'vergi', 'rapor', 'ayar']) { await sekme(w, t); }
   kontrol(errs.length === 0, 'tüm sekmeler hatasız açılıyor ' + (errs.length ? JSON.stringify(errs) : ''));
   const ag = await w.evaluate(async () => { try { await fetch('https://example.com'); return 'ulaştı'; } catch { return 'engelli'; } });
@@ -160,7 +166,10 @@ async function main() {
 
   /* ---------------- 3. Prices ---------------- */
   aktifTest = 'fiyatlar';
+  await sekme(w, 'ayar'); await w.fill('#k-ad', 'Yarım kalan yazı');
   await w.click('[data-act="fiyat-yenile"]'); await bekle(3000);
+  kontrol(await w.inputValue('#k-ad') === 'Yarım kalan yazı', 'fiyatlar arka planda gelince doldurulan form silinmiyor');
+  await w.fill('#k-ad', ''); await sekme(w, 'ozet');
   kontrol(/Fiyatlar: \d{2}\.\d{2}\.\d{4}/.test(await metin(w, '#chips')), 'fiyat güncelleme zamanı görünüyor');
   await sekme(w, 'poz');
   tablo = await metin(w, '#main');
@@ -201,6 +210,31 @@ async function main() {
   kontrol(/Excel'den yükle/.test(await metin(w, '#modal')), 'içe aktarma önizlemesi açıldı');
   await w.click('[data-act="ice-uygula"]'); await bekle(800);
   kontrol(/0 işlem/.test(await w.textContent('#toast')) && /6 tekrar eden/.test(await w.textContent('#toast')), 'aynı dosya tekrar yüklenince işlemler çoğalmıyor');
+  // a hand-made table: title rows, Turkish headers with units ("Fiyat (TL)", "İşlem Türü"), real Excel dates
+  const elle = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(elle, XLSX.utils.aoa_to_sheet([['PORTFÖY ÖZETİ'], [], ['Hisse', 'Güncel Fiyat (TL)', 'Fiyat Tarihi', 'Net Lot'], ['KCHOL', 190, new Date(Date.UTC(2026, 8, 1)), 50]]), 'Portfoy');
+  XLSX.utils.book_append_sheet(elle, XLSX.utils.aoa_to_sheet([['İŞLEM KAYITLARI'], ['Mavi hücreler giriş alanıdır'], ['Hisse', 'Tarih', 'İşlem Türü', 'Lot', 'Fiyat (TL)', 'Komisyon (TL)', 'Tutar (TL)'],
+    ['KCHOL', new Date(Date.UTC(2026, 2, 2)), 'Alış', 100, 180, 9.45, null], ['FROTO', new Date(Date.UTC(2026, 2, 3)), 'Alış', 20, 900, 9.45, null],
+    ['KCHOL', new Date(Date.UTC(2026, 3, 6)), 'Satış', 50, 200, 5.25, null], ['FROTO', new Date(Date.UTC(2026, 4, 7)), 'Bedelsiz', 20, 0, 0, null], ['YAC', new Date(Date.UTC(2026, 4, 8)), 'Alış', 1000, 2.5, 0, null]]), 'Islemler');
+  const elleYol = path.join(tmp, 'kendi tablom.xlsx'); fs.writeFileSync(elleYol, XLSX.write(elle, { type: 'buffer', bookType: 'xlsx' }));
+  await w.setInputFiles('#xl-in', elleYol); await bekle(1200);
+  const elleOn = await metin(w, '#modal');
+  kontrol(/5 işlem/.test(elleOn) && /KCHOL/.test(elleOn) && /FROTO/.test(elleOn) && !/okunamadı/.test(elleOn) && /02\.03\.2026/.test(elleOn), 'başlıkları farklı yazılmış kendi Excel tablosu okunuyor');
+  kontrol(/YAC üç harfli olduğu için TEFAS fonu/.test(elleOn) && !/(KCHOL|FROTO), YAC üç harfli/.test(elleOn), 'tür sütunu olmayan tabloda üç harfli kod fon olarak tanınıyor');
+  await w.click('[data-act="ice-kapat-btn"]'); await bekle(300);
+  // the old program's empty template: no trades, only brokers and its helper code list
+  const sablon = XLSX.utils.book_new();
+  const sab = [['ISLEM_NO', 'ARACI_KURUM', 'HISSE', 'TARIH', 'ALINAN_LOT', 'SATILAN_LOT', 'ALIS_FIYATI', 'SATIS_FIYATI', 'ALIS_TOPLAM', 'SATIS_TOPLAM', 'KOMISYON', 'TEMETTU', 'ISLEM_GRUBU', '', '', '', '', '', 'HISSE', '', '', '', '', '', '', '', 'TARİH', 'ARACI KURUM', 'HİSSE'], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '', '', '', '', '', 0]];
+  for (const k of ['TAVHL', 'CEMAS', 'NETAS']) { const r = new Array(29).fill(''); r[18] = k; r[26] = 27; r[27] = 28; r[28] = 29; sab.push(r); }
+  XLSX.utils.book_append_sheet(sablon, XLSX.utils.aoa_to_sheet(sab), 'DATA');
+  const bankaS = XLSX.utils.aoa_to_sheet([[]]); XLSX.utils.sheet_add_aoa(bankaS, [['Şablon Kurum']], { origin: 'F2' }); XLSX.utils.sheet_add_aoa(bankaS, [[1]], { origin: 'J3' }); XLSX.utils.sheet_add_aoa(bankaS, [[0, null, 0.002]], { origin: 'H5' });
+  XLSX.utils.book_append_sheet(sablon, bankaS, 'BANKA_ISLEMLERI'); XLSX.utils.book_append_sheet(sablon, XLSX.utils.aoa_to_sheet([['x']]), 'ANA SAYFA');
+  const sablonYol = path.join(tmp, 'bos sablon.xlsm'); fs.writeFileSync(sablonYol, XLSX.write(sablon, { type: 'buffer', bookType: 'xlsx' }));
+  await w.setInputFiles('#xl-in', sablonYol); await bekle(1200);
+  const sabOn = await metin(w, '#modal');
+  kontrol(/alış\/satış kaydı yok/.test(sabOn) && /DATA sayfası boş/.test(sabOn), 'boş şablon yüklenince işlem olmadığı açıkça söyleniyor');
+  kontrol(!(await w.$('#ice-degistir')) && !(await w.isChecked('#ice-izleme')) && /3 kodu/.test(sabOn) && !/\b29\b/.test(sabOn), 'boş şablon defteri silemez, yardımcı kod listesi doğru okunuyor ve varsayılan olarak eklenmiyor');
+  await w.click('[data-act="ice-kapat-btn"]'); await bekle(300);
   // old Excel program layout with many rows (performance)
   const eski = XLSX.utils.book_new();
   const satir = [['ISLEM_NO', 'ARACI_KURUM', 'HISSE', 'TARIH', 'ALINAN_LOT', 'SATILAN_LOT', 'ALIS_FIYATI', 'SATIS_FIYATI', 'ALIS_TOPLAM', 'SATIS_TOPLAM', 'KOMISYON', 'TEMETTU', 'ISLEM_GRUBU'], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]];
@@ -278,12 +312,13 @@ async function main() {
 
   aktifTest = 'tek kopya';
   ({ app, w, errs } = await baslat(ud, fx));
-  let ikinci = null;
+  let ikinci = null; ikinciDeneniyor = true;
   try { ikinci = await electron.launch({ executablePath: process.env.PD_EXE || require('electron'), args: [...(process.env.PD_EXE ? [] : [ROOT]), ...(process.platform === 'linux' ? ['--no-sandbox', '--password-store=basic'] : [])], env: { ...process.env, PD_USER_DATA: ud }, timeout: 15000 }); } catch {}
   await bekle(2000);
   const ikinciPencere = ikinci ? await ikinci.windows().length : 0;
   kontrol(ikinciPencere === 0, 'ikinci kez açılınca yeni kopya başlamıyor, mevcut pencere öne geliyor');
   if (ikinci) await kapat(ikinci);
+  ikinciDeneniyor = false;
   await kapat(app);
 
   smtp.close();
@@ -298,7 +333,10 @@ async function main() {
   process.exit(basarisiz.length ? 1 : 0);
 }
 let coktu = false;
+// The second copy quits on purpose; Playwright then reports its closed session as an unhandled error.
+let ikinciDeneniyor = false;
 async function cokus(e) {
+  if (ikinciDeneniyor && /session closed|Target.*closed|has been closed/i.test(String(e && e.message))) return;
   if (coktu) return; coktu = true;
   if (/failed to launch|launch/i.test(String(e && e.message))) await taniCalistir().catch(() => {});
   else if (taniBekle) await taniBekle.catch(() => {});

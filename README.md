@@ -21,6 +21,7 @@ BIST hisseleri ve TEFAS fonları için kişisel portföy takibi. Windows ve macO
 1. `PortfoyDefteri-1.0.0-win-x64.zip` dosyasını bir klasöre çıkarın (örneğin `Belgeler\Portföy Defteri`).
 2. `PortfoyDefteri.exe` dosyasını çalıştırın.
 3. Uygulama imzasız olduğu için Windows "Windows kişisel bilgisayarınızı korudu" uyarısı gösterebilir. **Ek bilgi → Yine de çalıştır** seçin.
+4. Pencereyi kapatınca uygulama kapanmaz, sabah işini yapabilmek için saatin yanındaki simge olarak çalışmaya devam eder (simge görünmüyorsa ^ okuna tıklayın). Tamamen kapatmak için simgeye sağ tıklayıp **Çık** seçin.
 
 Kurulum programı (`.exe` yükleyici) isterseniz aşağıdaki "Derleme" bölümüne bakın.
 
@@ -46,7 +47,7 @@ Mac'te uygulama paketinin adı "Portfoy Defteri" (ö harfi olmadan) olarak derle
 
 | Veri | Kaynaklar |
 |---|---|
-| BIST hisseleri | Yahoo Finance (fiyat ve 1 yıllık günlük geçmiş); doğrulama için Bigpara, TradingView ve İş Yatırım |
+| BIST hisseleri | Yahoo Finance (fiyat ve 1 yıllık günlük geçmiş); doğrulama için İş Yatırım ve TradingView |
 | TEFAS fonları | TEFAS (2026'daki yeni API; çalışmazsa eski uç nokta) |
 | Döviz (USD, EUR) | TCMB gösterge kurları |
 
@@ -65,7 +66,9 @@ Rapor, uygulama açıkken (pencere kapalı ve arka planda olsa da) belirlenen sa
 
 ## Eski Excel programından geçiş
 
-**Excel'den yükle** düğmesiyle eski programın `.xlsm` dosyasını seçin. DATA sayfasındaki işlemler, BANKA_ISLEMLERI sayfasındaki para hareketleri ve aracı kurum komisyon tabloları önizlemede gösterilir. Ardından "Mevcut defterime ekle" ya da "Defterimi bu dosyayla değiştir" seçilir. Dosya yalnızca bilgisayarınızda okunur.
+**Excel'den yükle** düğmesiyle eski programın `.xlsm` dosyasını seçin. DATA sayfasındaki işlemler, BANKA_ISLEMLERI sayfasındaki para hareketleri ve aracı kurum komisyon tabloları önizlemede gösterilir. Ardından "Mevcut defterime ekle" ya da "Defterimi bu dosyayla değiştir" seçilir. Dosya yalnızca bilgisayarınızda okunur. Programın boş şablonunda DATA sayfası boştur; o durumda önizleme bunu açıkça söyler ve yalnızca aracı kurumlar alınır.
+
+Kendi hazırladığınız bir Excel tablosu da yüklenebilir: başlık satırında en az **Hisse** (ya da Kod) ve **Tarih** sütunları olmalı; **İşlem türü** (Alış/Satış/Bedelsiz/Temettü), **Lot** (ya da Adet), **Fiyat** ve **Komisyon** sütunları da okunur. Başlıkların üstünde açıklama satırları, başlıklarda "(TL)" gibi birimler olabilir.
 
 ## Geliştirme
 

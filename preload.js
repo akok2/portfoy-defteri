@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('desktop', {
   storeDelete: p => ipcRenderer.invoke('store:delete', p),
   onStoreChanged: cb => { const f = (e, v) => cb(v); ipcRenderer.on('store:changed', f); },
   saveFile: (name, bytes) => ipcRenderer.invoke('file:save', name, bytes),
-  refreshPrices: () => ipcRenderer.invoke('prices:refresh'),
+  refreshPrices: kodlar => ipcRenderer.invoke('prices:refresh', kodlar),
   testSources: () => ipcRenderer.invoke('prices:test'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: patch => ipcRenderer.invoke('settings:set', patch),
