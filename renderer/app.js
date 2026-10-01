@@ -819,7 +819,7 @@ function renderModal(){
   const m=$("#modal"); const P=S.ice; if(!P){ m.innerHTML=""; return; }
   if(P.hata){ m.innerHTML=`<div class="scrim center" data-act="ice-kapat"><div class="modal" role="dialog" aria-modal="true" aria-label="Excel yükleme"><h2>Dosya okunamadı</h2><p class="small muted">${esc(P.dosya)}</p><p class="err-msg">${esc(P.hata)}</p><div class="row"><button class="btn" data-act="ice-kapat-btn">Kapat</button><label class="btn primary" for="xl-in">Başka dosya seç</label></div></div></div>`; return; }
   const kayitli=!S.demo&&(S.defter.islemler.length||S.defter.hisseler.length||S.defter.nakit.length);
-  const varIsl=new Set(S.defter.islemler.map(islemImza)), tekrar=S.iceMod==="ekle"&&!S.demo?P.islemler.filter(x=>varIsl.has(islemImza(x))).length:0;
+  const varIsl=new Map(); for(const x of S.defter.islemler){ const k=islemImza(x); varIsl.set(k,(varIsl.get(k)||0)+1); } const tekrar=S.iceMod==="ekle"&&!S.demo?P.islemler.filter(x=>{ const k=islemImza(x); if(varIsl.get(k)>0){ varIsl.set(k,varIsl.get(k)-1); return true; } return false; }).length:0;
   const kodlar=[...new Set(P.islemler.map(x=>x.kod))];
   const ornek=P.islemler.slice(0,8);
   const pc={"Alış":"buy","Satış":"sell","Bedelsiz":"bonus","Temettü":"div"};
@@ -861,15 +861,16 @@ async function iceUygula(btn){
   // brokers: file tables win for the same name
   for(const k of P.kurumlar){ const j=d.kurumlar.findIndex(x=>x.ad===k.ad); if(j>=0) d.kurumlar[j]=k; else d.kurumlar.push(k); }
   // transactions
-  const varIsl=new Set(d.islemler.map(islemImza)); let no=d.islemler.reduce((m,x)=>Math.max(m,+x.no||0),0), eklenen=0, atlanan=0; const t0=Date.now();
+  // duplicates are matched one-for-one against what the ledger already holds, so two identical trades inside the file both stay
+  const varIsl=new Map(); for(const x of d.islemler){ const k=islemImza(x); varIsl.set(k,(varIsl.get(k)||0)+1); } let no=d.islemler.reduce((m,x)=>Math.max(m,+x.no||0),0), eklenen=0, atlanan=0; const t0=Date.now();
   const kullanilanNo=new Set(d.islemler.map(x=>+x.no));
   [...P.islemler].sort((a,b)=>a.tarih<b.tarih?-1:a.tarih>b.tarih?1:(a.no||0)-(b.no||0)).forEach((x,i)=>{
-    if(varIsl.has(islemImza(x))){ atlanan++; return; }
+    const k=islemImza(x); if(varIsl.get(k)>0){ varIsl.set(k,varIsl.get(k)-1); atlanan++; return; }
     const y=Object.assign({},x,{id:uid6(),t:t0+i}); if(!y.no||kullanilanNo.has(+y.no)) y.no=++no; else no=Math.max(no,+y.no); kullanilanNo.add(+y.no);
-    if(y.tur!=="Temettü") y.tutar=null; d.islemler.push(y); varIsl.add(islemImza(x)); eklenen++; });
+    if(y.tur!=="Temettü") y.tutar=null; d.islemler.push(y); eklenen++; });
   // cash
-  const varNakit=new Set(d.nakit.map(nakitImza)); let nEk=0;
-  for(const n of P.nakit){ if(varNakit.has(nakitImza(n))) continue; d.nakit.push(Object.assign({id:uid6()},n)); varNakit.add(nakitImza(n)); nEk++; }
+  const varNakit=new Map(); for(const n of d.nakit){ const k=nakitImza(n); varNakit.set(k,(varNakit.get(k)||0)+1); } let nEk=0;
+  for(const n of P.nakit){ const k=nakitImza(n); if(varNakit.get(k)>0){ varNakit.set(k,varNakit.get(k)-1); continue; } d.nakit.push(Object.assign({id:uid6()},n)); nEk++; }
   // stocks: saved settings, then every traded code, then the optional watch list
   const yeniKod=[];
   const hisseEkle=h=>{ const j=d.hisseler.findIndex(x=>x.kod===h.kod); if(j>=0){ if(h.tip) Object.assign(d.hisseler[j],Object.fromEntries(Object.entries(h).filter(([,v])=>v!=null&&v!==""))); } else { d.hisseler.push(Object.assign({tip:"Hisse",ad:""},h)); yeniKod.push(h); } };
@@ -923,7 +924,9 @@ function gizlilikDesktop(){
   <div class="row"><button class="btn" data-act="veri-klasoru">Veri klasörünü aç</button><button class="btn" data-act="kaynak-test">Fiyat kaynaklarını test et</button><span class="small muted">${esc(ds.veriKlasoru||"")}</span></div>
   <div id="kaynak-sonuc"></div>`;
 }
-function raporOlustur(){
+async function raporOlustur(){
+  for(let i=0;i<40&&!(S.defterGeldi&&S.piyasaGeldi);i++) await new Promise(r=>setTimeout(r,250));
+  if(S.demo) throw new Error("Henüz bir defter oluşturulmamış. Uygulamada 'Boş defterle başla' ya da 'Excel'den yükle' ile defterini kur.");
   const c=hesapla(S.defter), T=c.toplam; S.calc=c;
   const g="#16794A", k="#C23A2B", m="#5B6660";
   const renk=n=>!isFinite(n)||Math.abs(n)<1e-9?"#15201B":(n>0?g:k);
@@ -992,15 +995,17 @@ async function boot(){
   if(!db){ render(); return; }
   S.connected=true;
   if(DESKTOP){ try{ S.ds=await window.desktop.getSettings(); }catch(e){}
-    window.desktop.onStatus(v=>{ S.yenileniyor=!!v.calisiyor; if(v.sonuc) toast(v.sonuc.ozet); if(v.hata) toast("Fiyatlar alınamadı: "+v.hata); renderChips(); });
+    if(S.ds&&S.ds.kurtarma){ S.err=S.ds.kurtarma; }
+    window.desktop.onStatus(v=>{ if(v.kayitHatasi){ S.err="Değişiklikler diske yazılamadı: "+v.kayitHatasi+". Disk dolu ya da klasör kilitli olabilir; uygulama tekrar deneyecek."; renderBanner(); return; } S.yenileniyor=!!v.calisiyor; if(v.sonuc) toast(v.sonuc.ozet); if(v.hata) toast("Fiyatlar alınamadı: "+v.hata); renderChips(); });
     window.desktop.onReportRequest(async()=>raporOlustur()); }
   S.uid=user?await user.id():null;
   const w=user?await user.can("data.write"):null; if(w===false){} // own subtree writes are decided by the store
-  db.doc("piyasa/fiyatlar").onSnapshot(s=>{ S.piyasa=s.exists?s.data():{veriler:{}}; S.calc=hesapla(S.defter); render(); },e=>console.warn(e));
+  db.doc("piyasa/fiyatlar").onSnapshot(s=>{ S.piyasaGeldi=true; S.piyasa=s.exists?s.data():{veriler:{}}; S.calc=hesapla(S.defter); render(); },e=>console.warn(e));
   db.doc("piyasa/gecmis").onSnapshot(s=>{ S.gecmis=s.exists?s.data():{veriler:{}}; if(S.detay) renderDrawer(); },e=>console.warn(e));
   db.doc("piyasa/durum").onSnapshot(s=>{ S.durum=s.exists?s.data():null; if(S.tab==="rapor") renderMain(); },e=>console.warn(e));
   if(!S.uid){ render(); return; }
   db.doc("data/users/"+S.uid+"/defter").onSnapshot(s=>{
+    S.defterGeldi=true;
     if(s.metadata?.hasPendingWrites) return;
     if(s.exists){ const d=s.data(); if(dirty) return; S.defter=Object.assign(BOS(),clone(d)); S.defter.elleFiyat ||= {}; S.demo=false; }
     S.calc=hesapla(S.defter); render(); if(S.tab==="islem") syncIslemForm();

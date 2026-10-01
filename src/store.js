@@ -16,8 +16,32 @@ class Store extends EventEmitter {
     this.backupDir = path.join(dir, 'yedekler');
     this.docs = {};
     this.timer = null;
+    this.kurtarma = null;
     fs.mkdirSync(this.backupDir, { recursive: true });
-    this.load();
+    this.loadSafely();
+  }
+
+  // A damaged or unreadable file (for example copied from another computer) never stops the app:
+  // it is set aside and the newest readable daily backup is used instead.
+  loadSafely() {
+    try { this.load(); return; } catch (e) {
+      const kenar = this.file.replace(/\.dat$/, `.okunamadi-${Date.now()}.dat`);
+      try { fs.renameSync(this.file, kenar); } catch {}
+      const yedekler = fs.readdirSync(this.backupDir).filter(f => /^defter-\d{4}-\d{2}-\d{2}\.dat$/.test(f)).sort().reverse();
+      for (const y of yedekler) {
+        try { this.loadFrom(path.join(this.backupDir, y)); fs.copyFileSync(path.join(this.backupDir, y), this.file); this.kurtarma = `Defter dosyası okunamadı; ${y.slice(7, 17)} tarihli yedekten açıldı. Okunamayan dosya ${path.basename(kenar)} adıyla saklandı.`; return; } catch {}
+      }
+      this.docs = {};
+      this.kurtarma = `Defter dosyası okunamadı ve kullanılabilir yedek bulunamadı. Okunamayan dosya ${path.basename(kenar)} adıyla saklandı.`;
+    }
+  }
+
+  loadFrom(file) {
+    const raw = fs.readFileSync(file);
+    const text = raw.slice(0, MAGIC.length).toString('utf8') === MAGIC ? safeStorage.decryptString(raw.slice(MAGIC.length)) : raw.toString('utf8');
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || !parsed.docs || typeof parsed.docs !== 'object') throw new Error('biçim');
+    this.docs = parsed.docs;
   }
 
   encryptionAvailable() {
@@ -26,15 +50,7 @@ class Store extends EventEmitter {
 
   load() {
     if (!fs.existsSync(this.file)) return;
-    const raw = fs.readFileSync(this.file);
-    let text;
-    if (raw.slice(0, MAGIC.length).toString('utf8') === MAGIC) {
-      text = safeStorage.decryptString(raw.slice(MAGIC.length));
-    } else {
-      text = raw.toString('utf8');
-    }
-    const parsed = JSON.parse(text);
-    this.docs = parsed && typeof parsed === 'object' && parsed.docs ? parsed.docs : {};
+    this.loadFrom(this.file);
   }
 
   serialize() {
@@ -55,7 +71,7 @@ class Store extends EventEmitter {
 
   scheduleWrite() {
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => { try { this.writeNow(); } catch (e) { this.emit('error', e); } }, 300);
+    this.timer = setTimeout(() => { try { this.writeNow(); } catch (e) { this.emit('error', e); this.timer = setTimeout(() => this.scheduleWrite(), 5000); } }, 300);
   }
 
   // One encrypted copy per day, the last 14 days kept.

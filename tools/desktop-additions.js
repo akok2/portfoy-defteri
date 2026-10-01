@@ -35,7 +35,9 @@ function gizlilikDesktop(){
   <div class="row"><button class="btn" data-act="veri-klasoru">Veri klasörünü aç</button><button class="btn" data-act="kaynak-test">Fiyat kaynaklarını test et</button><span class="small muted">${esc(ds.veriKlasoru||"")}</span></div>
   <div id="kaynak-sonuc"></div>`;
 }
-function raporOlustur(){
+async function raporOlustur(){
+  for(let i=0;i<40&&!(S.defterGeldi&&S.piyasaGeldi);i++) await new Promise(r=>setTimeout(r,250));
+  if(S.demo) throw new Error("Henüz bir defter oluşturulmamış. Uygulamada 'Boş defterle başla' ya da 'Excel'den yükle' ile defterini kur.");
   const c=hesapla(S.defter), T=c.toplam; S.calc=c;
   const g="#16794A", k="#C23A2B", m="#5B6660";
   const renk=n=>!isFinite(n)||Math.abs(n)<1e-9?"#15201B":(n>0?g:k);

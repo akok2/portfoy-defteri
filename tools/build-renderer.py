@@ -35,10 +35,13 @@ js = rep(js, '  if(a==="xlsx-disa"){', '  if(DESKTOP&&["fiyat-yenile","veri-klas
 js = rep(js, '  if(id==="f-rapor") return raporKaydet();', '  if(id==="f-drapor") return desktopKaydet();\n  if(id==="f-rapor") return raporKaydet();')
 js = rep(js, '  S.connected=true;\n', '''  S.connected=true;
   if(DESKTOP){ try{ S.ds=await window.desktop.getSettings(); }catch(e){}
-    window.desktop.onStatus(v=>{ S.yenileniyor=!!v.calisiyor; if(v.sonuc) toast(v.sonuc.ozet); if(v.hata) toast("Fiyatlar alınamadı: "+v.hata); renderChips(); });
+    if(S.ds&&S.ds.kurtarma){ S.err=S.ds.kurtarma; }
+    window.desktop.onStatus(v=>{ if(v.kayitHatasi){ S.err="Değişiklikler diske yazılamadı: "+v.kayitHatasi+". Disk dolu ya da klasör kilitli olabilir; uygulama tekrar deneyecek."; renderBanner(); return; } S.yenileniyor=!!v.calisiyor; if(v.sonuc) toast(v.sonuc.ozet); if(v.hata) toast("Fiyatlar alınamadı: "+v.hata); renderChips(); });
     window.desktop.onReportRequest(async()=>raporOlustur()); }
 ''')
 js = rep(js, '/* ---------- boot ---------- */', add + '\n/* ---------- boot ---------- */')
+js = rep(js, 'db.doc("piyasa/fiyatlar").onSnapshot(s=>{ ', 'db.doc("piyasa/fiyatlar").onSnapshot(s=>{ S.piyasaGeldi=true; ')
+js = rep(js, '  db.doc("data/users/"+S.uid+"/defter").onSnapshot(s=>{\n', '  db.doc("data/users/"+S.uid+"/defter").onSnapshot(s=>{\n    S.defterGeldi=true;\n')
 
 style = rep(style, '.chip .dot{', '.chip.btnchip{cursor:pointer;color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:var(--accent-soft);font:inherit;font-size:12.5px}\n.chip.btnchip[disabled]{opacity:.7;cursor:progress}\ndetails summary{cursor:pointer}\n.chip .dot{')
 # system fonts only: nothing is loaded from the internet

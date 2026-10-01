@@ -1,15 +1,19 @@
 // Portföy Defteri — desktop shell (Windows and macOS).
-const { app, BrowserWindow, ipcMain, dialog, shell, session, Tray, Menu, nativeImage, safeStorage, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, Tray, Menu, nativeImage, safeStorage, Notification, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { Store } = require('./src/store');
 const prices = require('./src/prices');
+// Tests can replace internet access with recorded responses (never set in normal use).
+const sahteAg = process.env.PD_TEST_FIXTURES ? require('./src/test-fetch')(process.env.PD_TEST_FIXTURES) : null;
+const agFetch = (u, o) => sahteAg ? sahteAg(u, o) : fetcher.fetch(u, o);
 
 app.setAppUserModelId('com.portfoydefteri.desktop');
 // Optional: keep data in a custom folder (portable use or testing).
 if (process.env.PD_USER_DATA) app.setPath('userData', process.env.PD_USER_DATA);
-if (!app.requestSingleInstanceLock()) { app.quit(); }
+const tekKopya = app.requestSingleInstanceLock();
+if (!tekKopya) app.quit();
 
 const UID = 'local';
 let win = null, tray = null, store = null, fetcher = null, quitting = false;
@@ -29,7 +33,7 @@ function loadSettings() {
 function saveSettings() { fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), { mode: 0o600 }); }
 function publicSettings() {
   const { smtp, ...rest } = settings;
-  return { ...rest, smtp: { host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, from: smtp.from, hasPass: !!smtp.passEnc }, sifreleme: store.encryptionAvailable(), veriKlasoru: app.getPath('userData'), surum: app.getVersion(), platform: process.platform };
+  return { ...rest, kurtarma: store.kurtarma || null, smtp: { host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, from: smtp.from, hasPass: !!smtp.passEnc }, sifreleme: store.encryptionAvailable(), veriKlasoru: app.getPath('userData'), surum: app.getVersion(), platform: process.platform };
 }
 const EMAIL_RE = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[A-Za-z]{2,}$/;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -78,7 +82,8 @@ function createWindow(show = true) {
   win.on('close', e => {
     if (!quitting && settings.arkaPlanda) { e.preventDefault(); win.hide(); if (process.platform === 'darwin') app.dock && app.dock.hide(); }
   });
-  win.on('closed', () => { win = null; });
+  win.webContents.on('did-start-loading', () => { sayfaHazir = false; });
+  win.on('closed', () => { win = null; sayfaHazir = false; });
 }
 function showWindow() {
   if (process.platform === 'darwin' && app.dock) app.dock.show();
@@ -104,7 +109,7 @@ let refreshing = null;
 function runRefresh(neden) {
   if (refreshing) return refreshing;
   broadcast('durum', { calisiyor: true, neden });
-  refreshing = prices.refresh(store, (u, o) => fetcher.fetch(u, o), UID)
+  refreshing = prices.refresh(store, agFetch, UID)
     .then(r => { broadcast('durum', { calisiyor: false, sonuc: r }); return r; })
     .catch(e => { broadcast('durum', { calisiyor: false, hata: e.message }); throw e; })
     .finally(() => { refreshing = null; });
@@ -113,8 +118,14 @@ function runRefresh(neden) {
 
 // The report is built by the page itself (it owns the calculations); main asks for it over IPC.
 const bekleyen = new Map();
+let sayfaHazir = false;
+async function sayfayiBekle() {
+  if (!win) { sayfaHazir = false; createWindow(false); }
+  for (let i = 0; i < 60 && !sayfaHazir; i++) await new Promise(r => setTimeout(r, 250));
+  if (!sayfaHazir) throw new Error('Uygulama ekranı hazırlanamadı.');
+}
 async function raporIste() {
-  if (!win) { createWindow(false); await new Promise(r => win.webContents.once('did-finish-load', r)); await new Promise(r => setTimeout(r, 1500)); }
+  await sayfayiBekle();
   const id = crypto.randomUUID();
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => { bekleyen.delete(id); reject(new Error('Rapor hazırlanamadı (zaman aşımı).')); }, 20000);
@@ -132,7 +143,8 @@ async function mailGonder({ subject, html, text }) {
   await tr.sendMail({ from: s.from || s.user, to: settings.raporEmail, subject, html, text });
 }
 async function sabahGorevi(neden) {
-  const r = await runRefresh(neden);
+  let r;
+  try { r = await runRefresh(neden); } catch (e) { r = { guncel: 0, toplam: 0, ozet: 'Fiyatlar alınamadı: ' + e.message }; }
   let rapor = 'kapalı';
   if (settings.raporAktif) {
     try { await mailGonder(await raporIste()); rapor = 'gönderildi'; }
@@ -143,6 +155,9 @@ async function sabahGorevi(neden) {
   return { ...r, rapor };
 }
 function bugunGun() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+// Runs once per day after the chosen time. If the computer was off or offline it catches up later,
+// retrying every 15 minutes until prices could be fetched (or the report sent).
+let gorevSuruyor = false, sonDeneme = 0;
 function zamanlayici() {
   const d = new Date();
   const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -150,8 +165,12 @@ function zamanlayici() {
   if (settings.haftaIci && haftaSonu) return;
   if (hhmm < settings.raporSaati) return;
   if (settings.sonOtomatikGun === bugunGun()) return;
-  settings.sonOtomatikGun = bugunGun(); saveSettings();
-  sabahGorevi('zamanlanmış').catch(() => {});
+  if (gorevSuruyor || Date.now() - sonDeneme < 15 * 60 * 1000) return;
+  gorevSuruyor = true; sonDeneme = Date.now();
+  sabahGorevi('zamanlanmış').then(r => {
+    const raporTamam = !settings.raporAktif || r.rapor === 'gönderildi';
+    if (r.guncel > 0 && raporTamam) { settings.sonOtomatikGun = bugunGun(); saveSettings(); }
+  }).catch(() => {}).finally(() => { gorevSuruyor = false; });
 }
 
 /* ---------- IPC ---------- */
@@ -163,18 +182,19 @@ function registerIpc() {
   handle('file:save', async (filename, bytes) => {
     const ext = path.extname(String(filename)).toLowerCase();
     if (!['.xlsx', '.csv', '.json', '.txt', '.html'].includes(ext)) return { ok: false, code: 'rejected_extension' };
-    const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('documents'), path.basename(String(filename))) });
+    const r = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('documents'), path.basename(String(filename))), filters: ext === '.xlsx' ? [{ name: 'Excel', extensions: ['xlsx'] }] : [{ name: ext.slice(1).toUpperCase(), extensions: [ext.slice(1)] }] });
     if (r.canceled || !r.filePath) return { ok: false, code: 'declined' };
     fs.writeFileSync(r.filePath, Buffer.from(bytes));
     return { ok: true, path: r.filePath };
   });
   handle('prices:refresh', () => runRefresh('elle'));
-  handle('prices:test', () => prices.testSources((u, o) => fetcher.fetch(u, o)));
+  handle('prices:test', () => prices.testSources(agFetch));
   handle('settings:get', () => publicSettings());
   handle('settings:set', patch => { applySettings(patch); return publicSettings(); });
   handle('mail:test', async () => { await mailGonder(await raporIste()); return true; });
   handle('rapor:simdi', () => sabahGorevi('elle'));
   handle('app:dataFolder', () => shell.openPath(app.getPath('userData')));
+  ipcMain.on('sayfa:hazir', e => { if (win && e.sender === win.webContents) sayfaHazir = true; });
   ipcMain.on('rapor:cevap', (e, { id, ok, rapor, hata }) => {
     const b = bekleyen.get(id); if (!b) return; bekleyen.delete(id);
     if (ok && rapor && typeof rapor.subject === 'string' && typeof rapor.html === 'string') b.resolve({ subject: rapor.subject.slice(0, 200), html: rapor.html, text: String(rapor.text || '') });
@@ -185,6 +205,9 @@ function registerIpc() {
 /* ---------- start ---------- */
 app.on('second-instance', showWindow);
 app.whenReady().then(() => {
+  if (!tekKopya) return;
+  // Linux test machines have no key store; tests opt into Electron's plain-text mode. Never used on Windows/macOS.
+  if (process.env.PD_TEST_FIXTURES && process.platform === 'linux' && safeStorage.setUsePlainTextEncryption) safeStorage.setUsePlainTextEncryption(true);
   settingsFile = path.join(app.getPath('userData'), 'ayarlar.json');
   store = new Store(app.getPath('userData'));
   loadSettings();
@@ -194,6 +217,7 @@ app.whenReady().then(() => {
   // Price requests use their own session (system proxy settings still apply).
   fetcher = session.fromPartition('fiyat-kaynaklari');
   store.on('change', (p, data) => broadcast('store:changed', { path: p, data }));
+  store.on('error', e => { broadcast('durum', { kayitHatasi: e.message }); if (Notification.isSupported()) new Notification({ title: 'Portföy Defteri', body: 'Değişiklikler diske yazılamadı: ' + e.message }).show(); });
   // macOS needs an application menu for copy/paste shortcuts in text fields; Windows needs none.
   Menu.setApplicationMenu(process.platform === 'darwin' ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]) : null);
   registerIpc();
@@ -205,6 +229,7 @@ app.whenReady().then(() => {
   const yas = f && f.guncelleme ? (() => { const m = /(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2})/.exec(f.guncelleme); return m ? Date.now() - new Date(+m[3], m[2] - 1, +m[1], +m[4], +m[5]).getTime() : Infinity; })() : Infinity;
   setTimeout(() => { if (yas > 12 * 3600e3) runRefresh('açılış').catch(() => {}); zamanlayici(); }, 4000);
   setInterval(zamanlayici, 60 * 1000);
+  powerMonitor.on('resume', () => setTimeout(zamanlayici, 20000));
   app.on('activate', showWindow);
 });
 app.on('before-quit', () => { quitting = true; try { store && store.flush(); } catch {} });

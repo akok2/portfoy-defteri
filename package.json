@@ -12,14 +12,18 @@
     "build:renderer": "python3 tools/build-renderer.py",
     "dist:win": "electron-builder --win --x64",
     "dist:mac": "electron-builder --mac",
-    "dist:linux": "electron-builder --linux AppImage"
+    "dist:linux": "electron-builder --linux AppImage",
+    "test": "node tests/e2e.js",
+    "test:canli": "node tests/canli-kaynaklar.js"
   },
   "dependencies": {
     "nodemailer": "^6.10.1"
   },
   "devDependencies": {
     "electron": "^33.4.11",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "playwright": "^1.63.0",
+    "smtp-server": "^3.19.16"
   },
   "build": {
     "appId": "com.portfoydefteri.desktop",
@@ -89,7 +93,8 @@
       ],
       "category": "Finance",
       "icon": "build/icon.png"
-    }
+    },
+    "executableName": "PortfoyDefteri"
   },
   "repository": {
     "type": "git",

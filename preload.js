@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('desktop', {
   openDataFolder: () => ipcRenderer.invoke('app:dataFolder'),
   onStatus: cb => { ipcRenderer.on('durum', (e, v) => cb(v)); },
   onReportRequest: cb => {
+    ipcRenderer.send('sayfa:hazir');
     ipcRenderer.on('rapor:hazirla', async (e, { id }) => {
       try { const rapor = await cb(); ipcRenderer.send('rapor:cevap', { id, ok: true, rapor }); }
       catch (err) { ipcRenderer.send('rapor:cevap', { id, ok: false, hata: String(err && err.message || err) }); }

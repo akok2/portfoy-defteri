@@ -19,7 +19,7 @@ BIST hisseleri ve TEFAS fonları için kişisel portföy takibi. Windows ve macO
 
 ### Windows
 1. `PortfoyDefteri-1.0.0-win-x64.zip` dosyasını bir klasöre çıkarın (örneğin `Belgeler\Portföy Defteri`).
-2. `Portföy Defteri.exe` dosyasını çalıştırın.
+2. `PortfoyDefteri.exe` dosyasını çalıştırın.
 3. Uygulama imzasız olduğu için Windows "Windows kişisel bilgisayarınızı korudu" uyarısı gösterebilir. **Ek bilgi → Yine de çalıştır** seçin.
 
 Kurulum programı (`.exe` yükleyici) isterseniz aşağıdaki "Derleme" bölümüne bakın.

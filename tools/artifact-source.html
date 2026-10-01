@@ -995,7 +995,7 @@ function renderModal(){
   const m=$("#modal"); const P=S.ice; if(!P){ m.innerHTML=""; return; }
   if(P.hata){ m.innerHTML=`<div class="scrim center" data-act="ice-kapat"><div class="modal" role="dialog" aria-modal="true" aria-label="Excel yükleme"><h2>Dosya okunamadı</h2><p class="small muted">${esc(P.dosya)}</p><p class="err-msg">${esc(P.hata)}</p><div class="row"><button class="btn" data-act="ice-kapat-btn">Kapat</button><label class="btn primary" for="xl-in">Başka dosya seç</label></div></div></div>`; return; }
   const kayitli=!S.demo&&(S.defter.islemler.length||S.defter.hisseler.length||S.defter.nakit.length);
-  const varIsl=new Set(S.defter.islemler.map(islemImza)), tekrar=S.iceMod==="ekle"&&!S.demo?P.islemler.filter(x=>varIsl.has(islemImza(x))).length:0;
+  const varIsl=new Map(); for(const x of S.defter.islemler){ const k=islemImza(x); varIsl.set(k,(varIsl.get(k)||0)+1); } const tekrar=S.iceMod==="ekle"&&!S.demo?P.islemler.filter(x=>{ const k=islemImza(x); if(varIsl.get(k)>0){ varIsl.set(k,varIsl.get(k)-1); return true; } return false; }).length:0;
   const kodlar=[...new Set(P.islemler.map(x=>x.kod))];
   const ornek=P.islemler.slice(0,8);
   const pc={"Alış":"buy","Satış":"sell","Bedelsiz":"bonus","Temettü":"div"};
@@ -1037,15 +1037,16 @@ async function iceUygula(btn){
   // brokers: file tables win for the same name
   for(const k of P.kurumlar){ const j=d.kurumlar.findIndex(x=>x.ad===k.ad); if(j>=0) d.kurumlar[j]=k; else d.kurumlar.push(k); }
   // transactions
-  const varIsl=new Set(d.islemler.map(islemImza)); let no=d.islemler.reduce((m,x)=>Math.max(m,+x.no||0),0), eklenen=0, atlanan=0; const t0=Date.now();
+  // duplicates are matched one-for-one against what the ledger already holds, so two identical trades inside the file both stay
+  const varIsl=new Map(); for(const x of d.islemler){ const k=islemImza(x); varIsl.set(k,(varIsl.get(k)||0)+1); } let no=d.islemler.reduce((m,x)=>Math.max(m,+x.no||0),0), eklenen=0, atlanan=0; const t0=Date.now();
   const kullanilanNo=new Set(d.islemler.map(x=>+x.no));
   [...P.islemler].sort((a,b)=>a.tarih<b.tarih?-1:a.tarih>b.tarih?1:(a.no||0)-(b.no||0)).forEach((x,i)=>{
-    if(varIsl.has(islemImza(x))){ atlanan++; return; }
+    const k=islemImza(x); if(varIsl.get(k)>0){ varIsl.set(k,varIsl.get(k)-1); atlanan++; return; }
     const y=Object.assign({},x,{id:uid6(),t:t0+i}); if(!y.no||kullanilanNo.has(+y.no)) y.no=++no; else no=Math.max(no,+y.no); kullanilanNo.add(+y.no);
-    if(y.tur!=="Temettü") y.tutar=null; d.islemler.push(y); varIsl.add(islemImza(x)); eklenen++; });
+    if(y.tur!=="Temettü") y.tutar=null; d.islemler.push(y); eklenen++; });
   // cash
-  const varNakit=new Set(d.nakit.map(nakitImza)); let nEk=0;
-  for(const n of P.nakit){ if(varNakit.has(nakitImza(n))) continue; d.nakit.push(Object.assign({id:uid6()},n)); varNakit.add(nakitImza(n)); nEk++; }
+  const varNakit=new Map(); for(const n of d.nakit){ const k=nakitImza(n); varNakit.set(k,(varNakit.get(k)||0)+1); } let nEk=0;
+  for(const n of P.nakit){ const k=nakitImza(n); if(varNakit.get(k)>0){ varNakit.set(k,varNakit.get(k)-1); continue; } d.nakit.push(Object.assign({id:uid6()},n)); nEk++; }
   // stocks: saved settings, then every traded code, then the optional watch list
   const yeniKod=[];
   const hisseEkle=h=>{ const j=d.hisseler.findIndex(x=>x.kod===h.kod); if(j>=0){ if(h.tip) Object.assign(d.hisseler[j],Object.fromEntries(Object.entries(h).filter(([,v])=>v!=null&&v!==""))); } else { d.hisseler.push(Object.assign({tip:"Hisse",ad:""},h)); yeniKod.push(h); } };

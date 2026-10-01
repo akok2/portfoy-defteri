@@ -30,7 +30,9 @@ const istDate = (sec, offset) => new Date((sec + (offset || 10800)) * 1000).toIS
 
 // Yahoo Finance chart endpoint: last price plus one year of daily closes (fills weekly/monthly/yearly returns).
 async function yahoo(http, kod) {
-  const j = await http(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(kod)}.IS?range=1y&interval=1d&includePrePost=false`);
+  const yol = `/v8/finance/chart/${encodeURIComponent(kod)}.IS?range=1y&interval=1d&includePrePost=false`;
+  let j;
+  try { j = await http('https://query1.finance.yahoo.com' + yol); } catch (e) { j = await http('https://query2.finance.yahoo.com' + yol); }
   const r = j && j.chart && j.chart.result && j.chart.result[0];
   if (!r || !r.meta) throw new Error('yanıt boş');
   const m = r.meta, ts = r.timestamp || [], cl = (r.indicators && r.indicators.quote && r.indicators.quote[0] && r.indicators.quote[0].close) || [];
