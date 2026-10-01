@@ -60,8 +60,75 @@ async function bigpara(http, kod) {
   return { fiyat, onceki: pick('dunkukapanis', 'oncekikapanis', 'dunkapanis'), tarih, ad: d.aciklama || '', kaynak: 'Bigpara' };
 }
 
-// TEFAS fund history endpoint (fund price is published once per business day).
-async function tefas(http, kod) {
+// TradingView public scanner (15-minute delayed BIST quotes). Independent second source for stocks.
+async function tradingview(http, kod) {
+  const j = await http('https://scanner.tradingview.com/turkey/scan', {
+    method: 'POST',
+    body: JSON.stringify({ symbols: { tickers: [`BIST:${kod}`], query: { types: [] } }, columns: ['close', 'description', 'change'] }),
+    headers: { 'Content-Type': 'application/json', Origin: 'https://www.tradingview.com', Referer: 'https://www.tradingview.com/' }
+  });
+  const row = j && Array.isArray(j.data) && j.data[0];
+  const d = row && row.d;
+  const fiyat = d ? Number(d[0]) : NaN;
+  if (!(fiyat > 0)) throw new Error('fiyat yok');
+  const deg = Number(d[2]);
+  return { fiyat, onceki: isFinite(deg) && deg > -100 ? Math.round(fiyat / (1 + deg / 100) * 10000) / 10000 : null, tarih: null, ad: d[1] || '', kaynak: 'TradingView' };
+}
+
+// İş Yatırım quote endpoint.
+async function isyatirim(http, kod) {
+  let j = await http(`https://www.isyatirim.com.tr/_layouts/15/IsYatirim.Website/Common/Data.aspx/OneEndeks?endeks=${encodeURIComponent(kod)}`, { headers: { Referer: 'https://www.isyatirim.com.tr/tr-tr/analiz/Sayfalar/default.aspx' } });
+  if (Array.isArray(j)) j = j[0];
+  const fiyat = j ? num(j.last) : NaN;
+  if (!(fiyat > 0)) throw new Error('fiyat yok');
+  const t = j.updateDate ? new Date(String(j.updateDate).replace(/\+03$/, '+03:00')) : null;
+  const tarih = t && !isNaN(t) ? new Date(t.getTime() + 10800000).toISOString().replace('T', ' ').slice(0, 16) : null;
+  return { fiyat, onceki: num(j.dayClose) > 0 ? num(j.dayClose) : null, tarih, ad: '', kaynak: 'İş Yatırım' };
+}
+
+// TEFAS. The site was redesigned in 2026; the new JSON API is tried first, the old endpoint is kept as a fallback.
+const tefasTarih = v => {
+  if (v == null) return null;
+  if (typeof v === 'number' || /^\d{12,}$/.test(String(v))) return new Date(Number(v) + 10800000).toISOString().slice(0, 10);
+  const s = String(v);
+  let m = /^(\d{4})-?(\d{2})-?(\d{2})/.exec(s); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = /^(\d{2})[./-](\d{2})[./-](\d{4})/.exec(s); if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return null;
+};
+function tefasSonuc(rows) {
+  const seri = new Map();
+  for (const r of rows) if (r.gun && r.f > 0) seri.set(r.gun, r);
+  const sirali = [...seri.values()].sort((a, b) => a.gun < b.gun ? -1 : 1);
+  if (!sirali.length) return null;
+  const son = sirali[sirali.length - 1], once = sirali[sirali.length - 2];
+  return { fiyat: son.f, onceki: once ? once.f : null, tarih: `${son.gun} 18:00`, ad: son.ad || '', kaynak: 'TEFAS', gecmisEk: sirali.map(r => [r.gun, r.f]) };
+}
+const TEFAS_JSON = { 'Content-Type': 'application/json', Accept: 'application/json, text/plain, */*', Origin: 'https://www.tefas.gov.tr', Referer: 'https://www.tefas.gov.tr/tr/fon-verileri' };
+const tefasListe = j => {
+  if (j && j.errorMessage && !/out of bounds|bulunamad/i.test(j.errorMessage)) throw new Error(String(j.errorMessage).slice(0, 80));
+  return (j && (j.resultList || j.data)) || [];
+};
+async function tefasYeni(http, kod) {
+  // 1) price history endpoint (works for every fund type, one-month window)
+  try {
+    const j = await http('https://www.tefas.gov.tr/api/funds/fonFiyatBilgiGetir', { method: 'POST', body: JSON.stringify({ fonKodu: kod, dil: 'TR', periyod: 1 }), headers: TEFAS_JSON });
+    const r = tefasSonuc(tefasListe(j).map(x => ({ gun: tefasTarih(x.tarih), f: num(x.fiyat), ad: x.fonUnvan })));
+    if (r) return r;
+  } catch (e) { if (/HTTP 429/.test(e.message)) throw e; }
+  // 2) general info endpoint, per fund type, last 14 days
+  const g = d => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const bit = new Date(), bas = new Date(Date.now() - 14 * 864e5);
+  let sonHata = null;
+  for (const tip of ['YAT', 'EMK', 'BYF']) {
+    try {
+      const j = await http('https://www.tefas.gov.tr/api/funds/fonGnlBlgSiraliGetir', { method: 'POST', headers: TEFAS_JSON, body: JSON.stringify({ fonTipi: tip, fonKodu: kod, aramaMetni: null, fonTurKod: null, fonGrubu: null, sfonTurKod: null, fonTurAciklama: null, kurucuKod: null, basTarih: g(bas), bitTarih: g(bit), basSira: 1, bitSira: 1000, dil: 'TR', sFonTurKod: '', fonKod: '', fonGrup: '', fonUnvanTip: '' }) });
+      const r = tefasSonuc(tefasListe(j).filter(x => !x.fonKodu || String(x.fonKodu).toUpperCase() === kod).map(x => ({ gun: tefasTarih(x.tarih), f: num(x.fiyat), ad: x.fonUnvan })));
+      if (r) return r;
+    } catch (e) { sonHata = e; }
+  }
+  throw sonHata || new Error('fon bulunamadı');
+}
+async function tefasEski(http, kod) {
   const bit = new Date(), bas = new Date(Date.now() - 14 * 864e5);
   const f = d => `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
   for (const tip of ['YAT', 'EMK', 'BYF']) {
@@ -70,14 +137,15 @@ async function tefas(http, kod) {
       method: 'POST', body,
       headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest', Origin: 'https://www.tefas.gov.tr', Referer: 'https://www.tefas.gov.tr/TarihselVeriler.aspx' }
     });
-    const rows = ((j && j.data) || []).filter(r => r && num(r.FIYAT) > 0).map(r => ({ t: Number(r.TARIH), f: num(r.FIYAT), ad: r.FONUNVAN || '' })).sort((a, b) => a.t - b.t);
-    if (rows.length) {
-      const son = rows[rows.length - 1], once = rows[rows.length - 2];
-      const gun = new Date(son.t + 10800000).toISOString().slice(0, 10);
-      return { fiyat: son.f, onceki: once ? once.f : null, tarih: `${gun} 18:00`, ad: son.ad, kaynak: 'TEFAS', gecmisEk: rows.map(r => [new Date(r.t + 10800000).toISOString().slice(0, 10), r.f]) };
-    }
+    const r = tefasSonuc(((j && j.data) || []).map(x => ({ gun: tefasTarih(Number(x.TARIH)), f: num(x.FIYAT), ad: x.FONUNVAN })));
+    if (r) return r;
   }
   throw new Error('fon bulunamadı');
+}
+async function tefas(http, kod) {
+  try { return await tefasYeni(http, kod); } catch (e1) {
+    try { return await tefasEski(http, kod); } catch (e2) { throw new Error(`yeni API: ${e1.message}; eski API: ${e2.message}`); }
+  }
 }
 
 // Central Bank of the Republic of Türkiye daily indicative rates.
@@ -109,21 +177,23 @@ async function pool(items, n, fn) {
   return out;
 }
 
+const HISSE_KAYNAKLARI = [['Yahoo', yahoo], ['Bigpara', bigpara], ['TradingView', tradingview], ['İş Yatırım', isyatirim]];
 async function stockQuote(http, kod) {
-  const res = await Promise.allSettled([yahoo(http, kod), bigpara(http, kod)]);
+  const res = await Promise.allSettled(HISSE_KAYNAKLARI.map(([, fn]) => fn(http, kod)));
   const ok = res.filter(r => r.status === 'fulfilled').map(r => r.value);
-  const hatalar = res.map((r, i) => r.status === 'rejected' ? `${['Yahoo', 'Bigpara'][i]}: ${r.reason && r.reason.message || r.reason}` : null).filter(Boolean);
+  const hatalar = res.map((r, i) => r.status === 'rejected' ? `${HISSE_KAYNAKLARI[i][0]}: ${r.reason && r.reason.message || r.reason}` : null).filter(Boolean);
   if (!ok.length) return { kod, hata: hatalar.join('; ') };
-  const [a, b] = ok;
+  // Main price: Yahoo when available (it also brings the daily history), otherwise the first source that answered.
+  const ana = ok[0], digerleri = ok.slice(1);
   let dogrulama = 'tek-kaynak', not = '';
-  if (a && b) {
-    const fark = Math.abs(a.fiyat / b.fiyat - 1);
-    dogrulama = fark <= 0.015 ? 'iki-kaynak' : 'uyusmazlik';
-    if (dogrulama === 'uyusmazlik') not = `${a.kaynak} ${a.fiyat} · ${b.kaynak} ${b.fiyat}`;
+  if (digerleri.length) {
+    const uyan = digerleri.filter(o => Math.abs(ana.fiyat / o.fiyat - 1) <= 0.015);
+    if (uyan.length) dogrulama = 'iki-kaynak';
+    else { dogrulama = 'uyusmazlik'; not = ok.map(o => `${o.kaynak} ${o.fiyat}`).join(' · '); }
   }
-  const ana = a; const onceki = ana.onceki != null ? ana.onceki : (b && b.onceki);
+  const onceki = ana.onceki != null ? ana.onceki : (digerleri.find(o => o.onceki != null) || {}).onceki;
   if (onceki > 0 && Math.abs(ana.fiyat / onceki - 1) > 0.105 && dogrulama !== 'uyusmazlik') { dogrulama = 'supheli'; not = 'Günlük hareket %10\'dan büyük; bedelsiz ya da bölünme olabilir, kontrol edin'; }
-  return { kod, fiyat: ana.fiyat, onceki: onceki ?? null, tarih: ana.tarih || (b && b.tarih), ad: ana.ad || (b && b.ad) || '', kaynak: ok.map(o => o.kaynak).join(' + '), dogrulama, not, gecmis: ok.find(o => o.gecmis)?.gecmis, uyari: hatalar.join('; ') };
+  return { kod, fiyat: ana.fiyat, onceki: onceki ?? null, tarih: ana.tarih || (digerleri.find(o => o.tarih) || {}).tarih || now().iso + ' 18:10', ad: ana.ad || (digerleri.find(o => o.ad) || {}).ad || '', kaynak: ok.map(o => o.kaynak).join(' + '), dogrulama, not, gecmis: ok.find(o => o.gecmis)?.gecmis, uyari: ok.length < 2 ? hatalar.join('; ') : '' };
 }
 
 async function fundQuote(http, kod) {
@@ -179,9 +249,11 @@ async function testSources(fetchImpl) {
   return Promise.all([
     deneme('Yahoo Finance (hisse)', async () => { const r = await yahoo(http, 'THYAO'); return `THYAO ${r.fiyat} · ${r.tarih} · ${r.gecmis.length} günlük geçmiş`; }),
     deneme('Bigpara (hisse)', async () => { const r = await bigpara(http, 'THYAO'); return `THYAO ${r.fiyat}${r.tarih ? ' · ' + r.tarih : ''}`; }),
+    deneme('TradingView (hisse)', async () => { const r = await tradingview(http, 'THYAO'); return `THYAO ${r.fiyat}`; }),
+    deneme('İş Yatırım (hisse)', async () => { const r = await isyatirim(http, 'THYAO'); return `THYAO ${r.fiyat}${r.tarih ? ' · ' + r.tarih : ''}`; }),
     deneme('TEFAS (fon)', async () => { const r = await tefas(http, 'AFT'); return `AFT ${r.fiyat} · ${r.tarih}`; }),
     deneme('TCMB (döviz)', async () => { const r = await tcmb(http); return `USD ${r.USD.satis} · EUR ${r.EUR ? r.EUR.satis : '—'}`; })
   ]);
 }
 
-module.exports = { refresh, testSources, _internal: { yahoo, bigpara, tefas, tcmb, makeHttp, stockQuote } };
+module.exports = { refresh, testSources, _internal: { yahoo, bigpara, tradingview, isyatirim, tefas, tefasYeni, tefasEski, tefasTarih, tcmb, makeHttp, stockQuote } };

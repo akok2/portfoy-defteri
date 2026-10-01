@@ -13,6 +13,7 @@ app.setAppUserModelId('com.portfoydefteri.desktop');
 // Optional: keep data in a custom folder (portable use or testing).
 if (process.env.PD_USER_DATA) app.setPath('userData', process.env.PD_USER_DATA);
 const tekKopya = app.requestSingleInstanceLock();
+console.log(`[pd] başlıyor: sürüm ${app.getVersion()}, electron ${process.versions.electron}, ${process.platform}-${process.arch}, veri ${app.getPath('userData')}, tek kopya kilidi ${tekKopya ? 'alındı' : 'ALINAMADI'}`);
 if (!tekKopya) app.quit();
 
 const UID = 'local';

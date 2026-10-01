@@ -24,8 +24,12 @@ function build(dir, { bigparaHata = false, hepsiHata = false } = {}) {
   for (const [kod, f] of Object.entries(hisseler)) {
     yaz(`yahoo-${kod}.json`, yahooChart(f), `chart/${kod}.IS`, hepsiHata ? 500 : undefined);
     yaz(`bigpara-${kod}.json`, { data: { hisseYuzeysel: { sembol: kod, kapanis: String(f).replace('.', ','), dunkukapanis: f * 0.99, tarih: new Date().toISOString(), aciklama: kod + ' A.Ş.' } } }, `hisseyuzeysel/${kod}`, (bigparaHata || hepsiHata) ? 500 : undefined);
+    yaz(`tv-${kod}.json`, { totalCount: 1, data: [{ s: `BIST:${kod}`, d: [f, kod + ' A.Ş.', 1.01] }] }, `"BIST:${kod}"`, (bigparaHata || hepsiHata) ? 500 : undefined);
+    yaz(`isy-${kod}.json`, [{ symbol: kod, last: f, dayClose: Math.round(f / 1.0101 * 100) / 100, updateDate: new Date().toISOString().slice(0, 19) + '+03' }], `OneEndeks?endeks=${kod}`, (bigparaHata || hepsiHata) ? 500 : undefined);
   }
   const bugun = Date.now();
+  const isoGun = ms => new Date(ms + 10800000).toISOString().slice(0, 10) + 'T00:00:00';
+  yaz('tefas-yeni.json', { errorCode: null, errorMessage: null, resultList: [{ fonKodu: 'AFT', fonUnvan: 'TEST FON', tarih: isoGun(bugun - 2 * 864e5), fiyat: 1.02 }, { fonKodu: 'AFT', fonUnvan: 'TEST FON', tarih: isoGun(bugun - 864e5), fiyat: 1.04 }, { fonKodu: 'AFT', fonUnvan: 'TEST FON', tarih: isoGun(bugun), fiyat: 1.056 }] }, 'tefas.gov.tr/api/funds/fonFiyatBilgiGetir', hepsiHata ? 500 : undefined);
   yaz('tefas.json', { data: [{ TARIH: String(bugun - 2 * 864e5), FIYAT: 1.02, FONUNVAN: 'TEST FON' }, { TARIH: String(bugun - 864e5), FIYAT: 1.04, FONUNVAN: 'TEST FON' }, { TARIH: String(bugun), FIYAT: 1.056, FONUNVAN: 'TEST FON' }] }, 'tefas.gov.tr', hepsiHata ? 500 : undefined);
   const d = new Date(); const tr = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
   yaz('tcmb.xml', `<?xml version="1.0"?><Tarih_Date Tarih="${tr}"><Currency Kod="USD"><ForexBuying>41.50</ForexBuying><ForexSelling>41.60</ForexSelling></Currency><Currency Kod="EUR"><ForexBuying>48.10</ForexBuying><ForexSelling>48.20</ForexSelling></Currency></Tarih_Date>`, 'tcmb.gov.tr', hepsiHata ? 500 : undefined);

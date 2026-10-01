@@ -44,11 +44,11 @@ macOS paketi (`.dmg`) bir Mac'te ya da GitHub Actions üzerinde derlenir (aşağ
 
 | Veri | Kaynaklar |
 |---|---|
-| BIST hisseleri | Yahoo Finance (fiyat ve 1 yıllık günlük geçmiş) + Bigpara (ikinci kaynak) |
-| TEFAS fonları | TEFAS |
+| BIST hisseleri | Yahoo Finance (fiyat ve 1 yıllık günlük geçmiş); doğrulama için Bigpara, TradingView ve İş Yatırım |
+| TEFAS fonları | TEFAS (2026'daki yeni API; çalışmazsa eski uç nokta) |
 | Döviz (USD, EUR) | TCMB gösterge kurları |
 
-İki kaynak %1,5 içinde uyuşursa fiyat "2 kaynakla doğrulandı" olarak işaretlenir. Uyuşmazlık, %10'dan büyük günlük hareket ya da güncellenemeyen fiyatlar uygulamada uyarı olarak görünür; eski fiyat silinmez. Gerekirse hisse detayından fiyat elle girilebilir.
+Ana fiyat en az bir başka kaynakla %1,5 içinde uyuşursa fiyat "2 kaynakla doğrulandı" olarak işaretlenir. Uyuşmazlık, %10'dan büyük günlük hareket ya da güncellenemeyen fiyatlar uygulamada uyarı olarak görünür; eski fiyat silinmez. Gerekirse hisse detayından fiyat elle girilebilir.
 
 **Ayarlar ve gizlilik → "Fiyat kaynaklarını test et"** düğmesi her kaynağı dener ve çalışıp çalışmadığını gösterir. Bu kaynaklar ücretsiz ve resmi olmayan uç noktalardır; biçimleri değişirse ilgili kaynak çalışmayı durdurabilir. O durumda diğer kaynak ve elle fiyat girişi kullanılmaya devam eder.
 

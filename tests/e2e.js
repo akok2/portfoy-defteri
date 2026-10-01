@@ -23,12 +23,17 @@ async function baslat(ud, fixtureDir, ekArgs = []) {
   const args = [];
   if (!exe) args.push(ROOT);
   if (process.platform === 'linux') args.push('--no-sandbox', '--password-store=basic');
-  const app = await electron.launch({
-    executablePath: exe || require('electron'),
-    args: [...args, ...ekArgs],
-    env: { ...process.env, PD_USER_DATA: ud, ...(fixtureDir ? { PD_TEST_FIXTURES: fixtureDir } : {}) },
-    timeout: 60000
-  });
+  const env = { ...process.env, PD_USER_DATA: ud, ...(fixtureDir ? { PD_TEST_FIXTURES: fixtureDir } : {}) };
+  let app;
+  sonBaslatma = { exe: exe || require('electron'), args: [...args, ...ekArgs], env: { ...env, ELECTRON_ENABLE_LOGGING: '1', ELECTRON_ENABLE_STACK_DUMPING: '1' } };
+  try {
+    app = await electron.launch({ executablePath: exe || require('electron'), args: [...args, ...ekArgs], env, timeout: 60000 });
+  } catch (e) {
+    // Launch failed: start the program directly for a few seconds and attach its own output to the error.
+    await taniCalistir();
+    throw e;
+  }
+  sonBaslatma = null;
   const w = await app.firstWindow();
   const errs = [];
   w.on('pageerror', e => errs.push(e.message));
@@ -37,12 +42,33 @@ async function baslat(ud, fixtureDir, ekArgs = []) {
   await bekle(1200);
   return { app, w, errs };
 }
+const tani = [];
+let taniBekle = null, sonBaslatma = null;
+function taniCalistir() {
+  if (!taniBekle && sonBaslatma) {
+    const { exe, args, env } = sonBaslatma;
+    taniBekle = dogrudanCalistir(exe, args, env).then(cikti => { tani.push(`Program doğrudan çalıştırıldı (${exe}):\n${cikti}`); });
+  }
+  return taniBekle || Promise.resolve();
+}
+function dogrudanCalistir(exe, args, env) {
+  return new Promise(resolve => {
+    let out = '';
+    let p;
+    try { p = require('child_process').spawn(exe, args, { env }); } catch (e) { return resolve('başlatılamadı: ' + e.message); }
+    const ekle = d => { out += d; if (out.length > 20000) out = out.slice(-20000); };
+    p.stdout.on('data', ekle); p.stderr.on('data', ekle);
+    const t = setTimeout(() => { out += `\n[15 sn sonra hâlâ çalışıyordu, kapatıldı]`; try { p.kill(); } catch {} }, 15000);
+    p.on('error', e => { out += '\n[hata] ' + e.message; });
+    p.on('exit', (code, sig) => { clearTimeout(t); resolve(out + `\n[çıkış kodu ${code}${sig ? ', sinyal ' + sig : ''}]`); });
+  });
+}
 async function kapat(app) { try { await app.evaluate(({ app }) => app.exit(0)); } catch {} await bekle(800); }
 const metin = async (w, sel) => ((await w.textContent(sel)) || '').replace(/\s+/g, ' ');
 async function sekme(w, ad) { await w.click(`[data-tab="${ad}"]`); await bekle(200); }
 
 async function main() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-test-'));
+  const tmp = fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'pd-test-'));
   const ud = path.join(tmp, 'Kullanıcı Verisi ö ş');   // non-ASCII path with spaces, like %APPDATA%\Portföy Defteri
   const fx = fixtures.build(path.join(tmp, 'fx-ok'));
   const fxBigparaYok = fixtures.build(path.join(tmp, 'fx-bigpara-yok'), { bigparaHata: true });
@@ -255,9 +281,18 @@ async function main() {
   }
   process.exit(basarisiz.length ? 1 : 0);
 }
-main().catch(e => {
+let coktu = false;
+async function cokus(e) {
+  if (coktu) return; coktu = true;
+  if (/failed to launch|launch/i.test(String(e && e.message))) await taniCalistir().catch(() => {});
+  else if (taniBekle) await taniBekle.catch(() => {});
   console.error('TEST ÇÖKTÜ', e);
-  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Uçtan uca testler (${process.platform})\n\n**Test yarıda kaldı** [${aktifTest}]: ${String(e && e.message || e).slice(0, 600)}\n\nGeçen/kalan kontroller:\n\n${sonuclar.map(x => `- ${x.ok ? 'geçti' : 'KALDI'} [${x.test}] ${x.mesaj}`).join('\n')}\n`);
-  try { fs.writeFileSync(path.join(ROOT, 'test-sonuclari.json'), JSON.stringify({ platform: process.platform, cokme: String(e && e.stack || e), aktifTest, sonuclar }, null, 1)); } catch {}
+  if (tani.length) console.error(tani.join('\n\n'));
+  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Uçtan uca testler (${process.platform})\n\n**Test yarıda kaldı** [${aktifTest}]: ${String(e && e.message || e).slice(0, 600)}\n\nGeçen/kalan kontroller:\n\n${sonuclar.map(x => `- ${x.ok ? 'geçti' : 'KALDI'} [${x.test}] ${x.mesaj}`).join('\n')}\n${tani.length ? '\n### Tanı\n\n```\n' + tani.join('\n\n').slice(-6000) + '\n```\n' : ''}`);
+  try { fs.writeFileSync(path.join(ROOT, 'test-sonuclari.json'), JSON.stringify({ platform: process.platform, cokme: String(e && e.stack || e), tani, aktifTest, sonuclar }, null, 1)); } catch {}
   process.exit(2);
-});
+}
+// Playwright can also report a failed launch outside the awaited call; send it to the same report.
+process.on('uncaughtException', cokus);
+process.on('unhandledRejection', cokus);
+main().catch(cokus);
