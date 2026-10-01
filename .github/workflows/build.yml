@@ -1,0 +1,78 @@
+name: Uygulamayı derle
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Uygulamayı paketle (kurulumsuz klasör)
+        run: npx electron-builder --win --x64 --dir --publish never
+      - name: Uçtan uca testler (gerçek Windows'ta, paketlenmiş uygulama)
+        shell: bash
+        run: PD_EXE="dist/win-unpacked/Portföy Defteri.exe" node tests/e2e.js
+      - name: Canlı fiyat kaynaklarını dene
+        if: always()
+        run: node tests/canli-kaynaklar.js
+      - name: Kurulum dosyası ve zip
+        run: npx electron-builder --win --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PortfoyDefteri-Windows
+          path: |
+            dist/*.exe
+            dist/*.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-sonuclari-windows
+          path: |
+            test-sonuclari.json
+            canli-kaynaklar.json
+          if-no-files-found: ignore
+
+  mac:
+    runs-on: macos-latest
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Uygulamayı paketle
+        run: npx electron-builder --mac --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - name: Uçtan uca testler (macOS)
+        run: |
+          APP=$(ls -d dist/mac-universal/*.app | head -1)
+          PD_EXE="$APP/Contents/MacOS/Portföy Defteri" node tests/e2e.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PortfoyDefteri-macOS
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-sonuclari-mac
+          path: test-sonuclari.json
+          if-no-files-found: ignore
