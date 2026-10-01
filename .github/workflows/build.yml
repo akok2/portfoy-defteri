@@ -65,8 +65,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # macOS: the bundle name must be plain ASCII. With "ö" in the bundle name Electron cannot find its
+      # helper processes and crashes at start (SIGTRAP). The window title and data folder stay "Portföy Defteri".
       - name: Uygulamayı paketle
-        run: npx electron-builder --mac --publish never
+        run: npx electron-builder --mac --publish never -c.productName="Portfoy Defteri"
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
       - name: Uçtan uca testler (macOS)
@@ -74,42 +76,6 @@ jobs:
         continue-on-error: true
         run: |
           APP=$(ls -d dist/mac*/*.app | head -1)
-          PD_EXE="$(ls "$APP"/Contents/MacOS/* | head -1)" node tests/e2e.js
-      - name: Tanı — imza bilgisi
-        if: steps.test.outcome != 'success'
-        continue-on-error: true
-        run: |
-          APP=$(ls -d dist/mac*/*.app | head -1)
-          { echo '## İmza bilgisi'; echo '```'; codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tail -5; codesign -dv "$APP" 2>&1; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: Tanı — yalnızca Apple Silicon paketi (universal değil)
-        if: steps.test.outcome != 'success'
-        continue-on-error: true
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: |
-          npx electron-builder --mac dir --arm64 -c.directories.output=dist-arm64 --publish never
-          echo '## Tanı: yalnızca arm64 paketi' >> "$GITHUB_STEP_SUMMARY"
-          APP=$(ls -d dist-arm64/mac*/*.app | head -1)
-          PD_EXE="$(ls "$APP"/Contents/MacOS/* | head -1)" node tests/e2e.js
-      - name: Tanı — imzasız arm64 paketi
-        if: steps.test.outcome != 'success'
-        continue-on-error: true
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: |
-          npx electron-builder --mac dir --arm64 -c.directories.output=dist-imzasiz -c.mac.identity=null --publish never
-          echo '## Tanı: imzasız arm64 paketi' >> "$GITHUB_STEP_SUMMARY"
-          APP=$(ls -d dist-imzasiz/mac*/*.app | head -1)
-          PD_EXE="$(ls "$APP"/Contents/MacOS/* | head -1)" node tests/e2e.js
-      - name: Tanı — ASCII adlı arm64 paketi (PortfoyDefteri)
-        if: steps.test.outcome != 'success'
-        continue-on-error: true
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: |
-          npx electron-builder --mac dir --arm64 -c.directories.output=dist-ascii -c.productName=PortfoyDefteri --publish never
-          echo '## Tanı: ASCII adlı arm64 paketi' >> "$GITHUB_STEP_SUMMARY"
-          APP=$(ls -d dist-ascii/mac*/*.app | head -1)
           PD_EXE="$(ls "$APP"/Contents/MacOS/* | head -1)" node tests/e2e.js
       - name: Uçtan uca testler (macOS, paketlenmemiş kaynak — tanı için)
         if: steps.test.outcome != 'success'
