@@ -60,8 +60,24 @@ function dogrudanCalistir(exe, args, env) {
     p.stdout.on('data', ekle); p.stderr.on('data', ekle);
     const t = setTimeout(() => { out += `\n[15 sn sonra hâlâ çalışıyordu, kapatıldı]`; try { p.kill(); } catch {} }, 15000);
     p.on('error', e => { out += '\n[hata] ' + e.message; });
-    p.on('exit', (code, sig) => { clearTimeout(t); resolve(out + `\n[çıkış kodu ${code}${sig ? ', sinyal ' + sig : ''}]`); });
+    const t0 = Date.now();
+    p.on('exit', (code, sig) => { clearTimeout(t); setTimeout(() => resolve(out + `\n[çıkış kodu ${code}${sig ? ', sinyal ' + sig : ''}]` + (sig ? cokmeRaporu(t0) : '')), sig ? 8000 : 0); });
   });
+}
+// macOS writes a crash report (.ips) for crashed programs; pull out the crashing thread.
+function cokmeRaporu(t0) {
+  if (process.platform !== 'darwin') return '';
+  try {
+    const dir = path.join(os.homedir(), 'Library', 'Logs', 'DiagnosticReports');
+    const dosyalar = fs.readdirSync(dir).filter(f => f.endsWith('.ips')).map(f => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs })).filter(x => x.m >= t0 - 2000).sort((a, b) => b.m - a.m);
+    if (!dosyalar.length) return '\n[çökme raporu bulunamadı]';
+    const ham = fs.readFileSync(path.join(dir, dosyalar[0].f), 'utf8');
+    const govde = JSON.parse(ham.slice(ham.indexOf('\n') + 1));
+    const imaj = govde.usedImages || [];
+    const th = (govde.threads || [])[govde.faultingThread] || {};
+    const kareler = (th.frames || []).slice(0, 30).map((k, i) => `${i} ${(imaj[k.imageIndex] || {}).name || '?'} ${k.symbol || ''}+${k.symbolLocation || k.imageOffset || ''}`);
+    return `\n--- çökme raporu: ${dosyalar[0].f}\nexception: ${JSON.stringify(govde.exception)}\ntermination: ${JSON.stringify(govde.termination)}\nasi: ${JSON.stringify(govde.asi)}\nthread ${govde.faultingThread} ${th.name || th.queue || ''}:\n${kareler.join('\n')}`;
+  } catch (e) { return '\n[çökme raporu okunamadı: ' + e.message + ']'; }
 }
 async function kapat(app) { try { await app.evaluate(({ app }) => app.exit(0)); } catch {} await bekle(800); }
 const metin = async (w, sel) => ((await w.textContent(sel)) || '').replace(/\s+/g, ' ');
@@ -288,7 +304,7 @@ async function cokus(e) {
   else if (taniBekle) await taniBekle.catch(() => {});
   console.error('TEST ÇÖKTÜ', e);
   if (tani.length) console.error(tani.join('\n\n'));
-  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Uçtan uca testler (${process.platform})\n\n**Test yarıda kaldı** [${aktifTest}]: ${String(e && e.message || e).slice(0, 600)}\n\nGeçen/kalan kontroller:\n\n${sonuclar.map(x => `- ${x.ok ? 'geçti' : 'KALDI'} [${x.test}] ${x.mesaj}`).join('\n')}\n${tani.length ? '\n### Tanı\n\n```\n' + tani.join('\n\n').slice(-6000) + '\n```\n' : ''}`);
+  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Uçtan uca testler (${process.platform})\n\n**Test yarıda kaldı** [${aktifTest}]: ${String(e && e.message || e).slice(0, 600)}\n\nGeçen/kalan kontroller:\n\n${sonuclar.map(x => `- ${x.ok ? 'geçti' : 'KALDI'} [${x.test}] ${x.mesaj}`).join('\n')}\n${tani.length ? '\n### Tanı\n\n```\n' + tani.join('\n\n').slice(-12000) + '\n```\n' : ''}`);
   try { fs.writeFileSync(path.join(ROOT, 'test-sonuclari.json'), JSON.stringify({ platform: process.platform, cokme: String(e && e.stack || e), tani, aktifTest, sonuclar }, null, 1)); } catch {}
   process.exit(2);
 }

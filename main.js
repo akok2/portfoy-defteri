@@ -12,8 +12,13 @@ const agFetch = (u, o) => sahteAg ? sahteAg(u, o) : fetcher.fetch(u, o);
 app.setAppUserModelId('com.portfoydefteri.desktop');
 // Optional: keep data in a custom folder (portable use or testing).
 if (process.env.PD_USER_DATA) app.setPath('userData', process.env.PD_USER_DATA);
+// Startup trace on stderr (written synchronously so it survives a crash).
+const iz = m => { try { fs.writeSync(2, `[pd] ${m}\n`); } catch {} };
 const tekKopya = app.requestSingleInstanceLock();
-console.log(`[pd] başlıyor: sürüm ${app.getVersion()}, electron ${process.versions.electron}, ${process.platform}-${process.arch}, veri ${app.getPath('userData')}, tek kopya kilidi ${tekKopya ? 'alındı' : 'ALINAMADI'}`);
+iz(`başlıyor: sürüm ${app.getVersion()}, electron ${process.versions.electron}, ${process.platform}-${process.arch}, veri ${app.getPath('userData')}, tek kopya kilidi ${tekKopya ? 'alındı' : 'ALINAMADI'}`);
+app.on('will-finish-launching', () => iz('will-finish-launching'));
+app.on('child-process-gone', (e, d) => iz(`yardımcı süreç kapandı: ${d.type} ${d.reason} ${d.exitCode}`));
+app.on('render-process-gone', (e, wc, d) => iz(`sayfa süreci kapandı: ${d.reason} ${d.exitCode}`));
 if (!tekKopya) app.quit();
 
 const UID = 'local';
@@ -209,22 +214,33 @@ app.whenReady().then(() => {
   if (!tekKopya) return;
   // Linux test machines have no key store; tests opt into Electron's plain-text mode. Never used on Windows/macOS.
   if (process.env.PD_TEST_FIXTURES && process.platform === 'linux' && safeStorage.setUsePlainTextEncryption) safeStorage.setUsePlainTextEncryption(true);
+  iz('hazır: ayarlar');
   settingsFile = path.join(app.getPath('userData'), 'ayarlar.json');
+  iz('depo');
   store = new Store(app.getPath('userData'));
+  iz('ayarlar okunuyor');
   loadSettings();
   // The page never talks to the internet: block every http(s) request from the window's session.
+  iz('ağ engeli');
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (d, cb) => cb({ cancel: true }));
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(false));
   // Price requests use their own session (system proxy settings still apply).
+  iz('fiyat oturumu');
   fetcher = session.fromPartition('fiyat-kaynaklari');
   store.on('change', (p, data) => broadcast('store:changed', { path: p, data }));
   store.on('error', e => { broadcast('durum', { kayitHatasi: e.message }); if (Notification.isSupported()) new Notification({ title: 'Portföy Defteri', body: 'Değişiklikler diske yazılamadı: ' + e.message }).show(); });
   // macOS needs an application menu for copy/paste shortcuts in text fields; Windows needs none.
+  iz('menü');
   Menu.setApplicationMenu(process.platform === 'darwin' ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]) : null);
+  iz('ipc');
   registerIpc();
+  iz('tepsi simgesi');
   createTray();
+  iz('giriş öğesi ayarları');
   const gizli = process.argv.includes('--gizli') || app.getLoginItemSettings().wasOpenedAsHidden;
+  iz('pencere');
   createWindow(!gizli);
+  iz('açıldı');
   // Refresh on start when prices are older than 12 hours, then check the schedule every minute.
   const f = store.get('piyasa/fiyatlar');
   const yas = f && f.guncelleme ? (() => { const m = /(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2})/.exec(f.guncelleme); return m ? Date.now() - new Date(+m[3], m[2] - 1, +m[1], +m[4], +m[5]).getTime() : Infinity; })() : Infinity;
