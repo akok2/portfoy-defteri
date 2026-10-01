@@ -28,7 +28,9 @@ Kurulum programı (`.exe` yükleyici) isterseniz aşağıdaki "Derleme" bölüm�
 macOS paketi (`.dmg`) bir Mac'te ya da GitHub Actions üzerinde derlenir (aşağıya bakın).
 1. `.dmg` dosyasını açın, Portföy Defteri'ni Uygulamalar klasörüne sürükleyin.
 2. İlk açılışta uygulamaya **sağ tıklayıp "Aç"** deyin. Uygulama Apple tarafından imzalanmadığı için macOS bunu bir kez sorar.
-3. "Hasarlı" uyarısı çıkarsa Terminal'de şunu çalıştırın: `xattr -cr "/Applications/Portföy Defteri.app"`
+3. "Hasarlı" uyarısı çıkarsa Terminal'de şunu çalıştırın: `xattr -cr "/Applications/Portfoy Defteri.app"`
+
+Mac'te uygulama paketinin adı "Portfoy Defteri" (ö harfi olmadan) olarak derlenir; macOS paket adında Türkçe harf olunca Electron açılışta çöküyor. Pencere başlığı ve veri klasörü yine "Portföy Defteri"dir.
 
 ## Verileriniz nerede, ne kadar güvende
 

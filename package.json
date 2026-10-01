@@ -11,7 +11,7 @@
     "start": "electron .",
     "build:renderer": "python3 tools/build-renderer.py",
     "dist:win": "electron-builder --win --x64",
-    "dist:mac": "electron-builder --mac",
+    "dist:mac": "electron-builder --mac -c.productName=\"Portfoy Defteri\"",
     "dist:linux": "electron-builder --linux AppImage",
     "test": "node tests/e2e.js",
     "test:canli": "node tests/canli-kaynaklar.js"
