@@ -58,7 +58,8 @@
           ]
         }
       ],
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "executableName": "PortfoyDefteri"
     },
     "nsis": {
       "oneClick": false,
@@ -92,9 +93,9 @@
         "AppImage"
       ],
       "category": "Finance",
-      "icon": "build/icon.png"
-    },
-    "executableName": "PortfoyDefteri"
+      "icon": "build/icon.png",
+      "executableName": "PortfoyDefteri"
+    }
   },
   "repository": {
     "type": "git",
