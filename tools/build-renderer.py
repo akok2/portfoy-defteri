@@ -38,6 +38,7 @@ js = rep(js, '  S.connected=true;\n', '''  S.connected=true;
     if(S.ds&&S.ds.kurtarma){ S.err=S.ds.kurtarma; }
     window.desktop.onStatus(v=>{ if(v.kayitHatasi){ S.err="Değişiklikler diske yazılamadı: "+v.kayitHatasi+". Disk dolu ya da klasör kilitli olabilir; uygulama tekrar deneyecek."; renderBanner(); return; } S.yenileniyor=!!v.calisiyor; if(v.sonuc) toast(v.sonuc.ozet); if(v.hata) toast("Fiyatlar alınamadı: "+v.hata); renderChips(); });
     window.desktop.onReportRequest(async()=>raporOlustur());
+    S.db.doc("piyasa/bist100").onSnapshot(s=>{ S.bist=s.exists?s.data():null; if(S.tab==="bist") arkaPlanRender(); },()=>{});
     setTimeout(ornekFiyatlari,2500); }
 ''')
 js = rep(js, '/* ---------- boot ---------- */', add + '\n/* ---------- boot ---------- */')

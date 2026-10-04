@@ -26,7 +26,7 @@ function gizlilikDesktop(){
   const ds=S.ds||{};
   return `<div class="prose"><ul>
     <li><b>Verilerin yalnızca bu bilgisayarda.</b> Hesap, bulut ya da sunucu yok. Defterin ${ds.sifreleme?"işletim sisteminin anahtar deposuyla <b>şifrelenmiş</b> bir dosyada":"bir dosyada (bu sistemde şifreleme kullanılamıyor)"} durur.</li>
-    <li><b>İnternete yalnızca fiyat almak için çıkılır</b> ve gönderilen tek bilgi hisse ya da fon kodudur (örn. THYAO). Lot, maliyet, işlem ve nakit bilgilerin hiçbir yere gönderilmez.</li>
+    <li><b>İnternete yalnızca fiyat almak için çıkılır</b> ve gönderilen tek bilgi hisse ya da fon kodudur (örn. THYAO). Lot, maliyet ve işlem bilgilerin hiçbir yere gönderilmez.</li>
     <li>Bu ekran internete hiç bağlanamaz; fiyat bağlantılarını yalnızca uygulamanın fiyat modülü yapar.</li>
     <li>Her gün otomatik şifreli yedek alınır, son 14 gün saklanır. Ayrıca istediğin zaman Excel olarak yedek indirebilirsin.</li>
     <li>E-posta raporu isteğe bağlıdır; gönderen hesabın şifresi işletim sisteminin anahtar deposunda şifreli tutulur.</li>
@@ -57,13 +57,14 @@ async function raporOlustur(){
     <table style="border-collapse:collapse;margin-bottom:16px"><tr>
       <td style="padding:8px 16px 8px 0"><div style="font-size:11px;color:${m}">PORTFÖY DEĞERİ</div><div style="font-size:20px;font-weight:700">${TL(T.deger)}</div>${usd?`<div style="font-size:12px;color:${m}">≈ $${nf2.format(T.deger/usd)}</div>`:""}</td>
       <td style="padding:8px 16px"><div style="font-size:11px;color:${m}">GÜNLÜK</div><div style="font-size:20px;font-weight:700;color:${renk(T.gunluk)}">${TLs(T.gunluk)}</div><div style="font-size:12px;color:${renk(T.gunluk)}">${PCT(T.gunlukYuzde)}</div></td>
-      <td style="padding:8px 16px"><div style="font-size:11px;color:${m}">${T.yontem==="net"?"TOPLAM K/Z":"KÂĞIT ÜSTÜ K/Z"}</div><div style="font-size:20px;font-weight:700;color:${renk(T.kz)}">${TLs(T.kz)}</div><div style="font-size:12px;color:${renk(T.kz)}">${PCT(T.kzYuzde)}</div></td>
+      <td style="padding:8px 16px"><div style="font-size:11px;color:${m}">KÂĞIT ÜSTÜ K/Z</div><div style="font-size:20px;font-weight:700;color:${renk(T.kz)}">${TLs(T.kz)}</div><div style="font-size:12px;color:${renk(T.kz)}">${PCT(T.kzYuzde)}</div></td>
     </tr></table>
-    ${elde.length?`<table style="border-collapse:collapse;width:100%"><tr><th style="padding:6px 10px;border-bottom:1px solid #DCDFD8;text-align:left;font-size:11px;color:${m}">HİSSE</th><th ${th}>Lot</th><th ${th}>Ort. maliyet</th><th ${th}>Fiyat</th><th ${th}>Değer</th><th ${th}>K/Z</th><th ${th}>Günlük</th></tr>${satirlar}</table>`:`<p>Açık pozisyon yok.</p>`}
+    ${elde.length?`<table style="border-collapse:collapse;width:100%"><tr><th style="padding:6px 10px;border-bottom:1px solid #DCDFD8;text-align:left;font-size:11px;color:${m}">HİSSE</th><th ${th}>Lot</th><th ${th}>Ort. alış</th><th ${th}>Fiyat</th><th ${th}>Değer</th><th ${th}>K/Z</th><th ${th}>Günlük</th></tr>${satirlar}</table>`:`<p>Açık pozisyon yok.</p>`}
     ${hareket.length?`<p style="margin-top:16px"><b>En çok yükselen:</b> ${hareket.slice(0,3).map(p=>esc(p.kod)+" "+PCT(p.gunlukYuzde)).join(", ")}<br><b>En çok düşen:</b> ${hareket.slice(-3).reverse().map(p=>esc(p.kod)+" "+PCT(p.gunlukYuzde)).join(", ")}</p>`:""}
     ${alarmlar.length?`<p><b>Hedef / stop uyarıları:</b><br>${alarmlar.map(p=>esc(p.kod)+": "+esc(p.alarm.msg)).join("<br>")}</p>`:""}
     ${c.uyarilar.filter(u=>u.lvl!=="ok").length?`<p><b>Kontrol etmen gerekenler:</b><br>${c.uyarilar.filter(u=>u.lvl!=="ok").map(u=>esc(u.kod)+": "+esc(u.msg)).join("<br>")}</p>`:""}
-    <p style="font-size:12px;color:${m}">Gerçekleşen K/Z ${TLs(T.gerceklesen)} · Net temettü ${TL(T.temettu)} · Ödenen komisyon ${TL(T.komisyon)}${T.nakitVar?` · Hesaptaki para ${TL(T.nakit)}`:""}</p>
+    ${(c.temettuOneri||[]).length?`<p><b>Bulunan temettüler:</b> ${c.temettuOneri.map(t=>esc(t.kod)+" "+fmtDate(t.tarih)+" ≈ "+TL(t.net)).join(", ")}. Uygulamadan onaylayıp deftere ekleyebilirsin.</p>`:""}
+    <p style="font-size:12px;color:${m}">Gerçekleşen K/Z ${TLs(T.gerceklesen)} · Net temettü ${TL(T.temettu)} · Ödenen komisyon ${TL(T.komisyon)} · Toplam sonuç ${TLs(T.sonuc)}<br>Kâr/zarar ortalama alış fiyatına göredir, komisyon dahil değildir.</p>
     <p style="font-size:11px;color:${m};margin-top:20px">Bu rapor bilgilendirme amaçlıdır, yatırım tavsiyesi değildir. Bilgisayarındaki Portföy Defteri uygulaması tarafından hazırlandı; raporu uygulamanın "Günlük rapor" sekmesinden kapatabilirsin.</p></div>`;
   const text=[`Portföy Defteri · ${tarih}`,`Fiyatlar: ${fiyatGunu}`,`Portföy değeri: ${TL(T.deger)} · Günlük: ${TLs(T.gunluk)} (${PCT(T.gunlukYuzde)}) · K/Z: ${TLs(T.kz)} (${PCT(T.kzYuzde)})`,"",
     ...elde.map(p=>`${p.kod}: ${LOT(p.lot)} lot · fiyat ${p.f?PX(p.f.fiyat):"—"} (${not(p)}) · değer ${TL(p.deger)} · K/Z ${TLs(p.kz)}`),"",
@@ -99,3 +100,47 @@ async function desktopEylem(a,t){
 // While the sample portfolio is shown (nothing saved yet) the price module has no codes of its own: pass the ones on screen.
 function ekranKodlari(){ if(!S.demo) return null; const m=new Map(); for(const h of S.defter.hisseler||[]) m.set(h.kod,h.tip==="Fon"?"Fon":"Hisse"); for(const x of S.defter.islemler||[]) if(!m.has(x.kod)) m.set(x.kod,"Hisse"); return [...m].map(([kod,tip])=>({kod,tip})); }
 function ornekFiyatlari(){ if(!DESKTOP||!S.demo) return; const v=(S.piyasa&&S.piyasa.veriler)||{}; const k=ekranKodlari()||[]; if(k.length&&k.some(x=>!v[x.kod])) window.desktop.refreshPrices(k).catch(()=>{}); }
+
+// A code was added on screen: fetch its price right away instead of waiting for the morning run.
+function kodEklendi(kod){ if(!DESKTOP) return; setTimeout(()=>{ window.desktop.refreshPrices(ekranKodlari()).catch(()=>{}); },1200); }
+
+/* ---------- BIST 100 page (desktop only) ---------- */
+if(DESKTOP){ TABS.splice(3,0,["bist","BIST 100"]); EK_GORUNUM.bist=vBist; }
+function bistYasi(){ const g=S.bist&&S.bist.zaman; return g?Date.now()-g:Infinity; }
+async function bistYenile(zorla){
+  if(S.bistYukleniyor) return; if(!zorla&&bistYasi()<15*60e3) return;
+  S.bistYukleniyor=true; S.bistHata=null; if(S.tab==="bist") renderMain();
+  try{ await window.desktop.bist100(); }catch(e){ S.bistHata=String(e&&e.message||e).replace(/^Error invoking remote method '[^']+': (Error: )?/,""); }
+  S.bistYukleniyor=false; if(S.tab==="bist") renderMain();
+}
+function vBist(){
+  setTimeout(()=>bistYenile(false),0);
+  const B=S.bist, L=(B&&B.liste)||[];
+  const q=(S.bistFiltre||"").trim().toLocaleUpperCase("tr-TR");
+  const sira=S.bistSira||"kod", yon=S.bistYon||1;
+  const deger=x=>sira==="degisim"?(x.degisim??-1e9):sira==="fiyat"?(x.fiyat??-1):sira==="ad"?(x.ad||""):x.kod;
+  const list=L.filter(x=>!q||x.kod.includes(q)||(x.ad||"").toLocaleUpperCase("tr-TR").includes(q)).sort((a,b)=>{ const A=deger(a),Bv=deger(b); return (A<Bv?-1:A>Bv?1:0)*yon; });
+  const durum=kod=>{ const p=S.calc.poz[kod]; if(p&&p.lot>0) return `<span class="pill ok">Portföyde</span>`; if(S.defter.hisseler.some(h=>h.kod===kod)) return `<span class="pill neutral">İzlemede</span>`; return `<button class="btn ghost" data-bist-ekle="${esc(kod)}">+ İzlemeye ekle</button>`; };
+  const yuk=L.filter(x=>x.degisim>0).length, dus=L.filter(x=>x.degisim<0).length;
+  const bas=(k,t,n)=>`<th class="${n?"n":""}"><button class="linkbtn" data-bist-sira="${k}" style="font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit">${t}${sira===k?(yon>0?" ▲":" ▼"):""}</button></th>`;
+  return `<section class="panel"><div class="panel-h"><h2>BIST 100 <span class="muted num" style="font-size:15px">${L.length||""}</span></h2>
+    <span class="row"><span class="small muted">${B&&B.guncelleme?`${esc(B.guncelleme)} · ${esc(B.kaynak||"")}`:""}${L.length?` · ${yuk} yükselen, ${dus} düşen`:""}</span><button class="btn" data-bist-yenile="1" ${S.bistYukleniyor?"disabled":""}>${S.bistYukleniyor?"Yükleniyor…":"↻ Yenile"}</button></span></div>
+    ${S.bistHata?`<p class="err-msg">Liste alınamadı: ${esc(S.bistHata)}</p>`:""}
+    <div class="row"><div class="field" style="max-width:260px"><label for="b-filtre">Ara</label><input id="b-filtre" value="${esc(S.bistFiltre||"")}" placeholder="Kod ya da şirket adı"></div><span class="small muted">Fiyatlar 15 dakika gecikmelidir. İzlemeye eklediğin hisse Pozisyonlar sekmesindeki izleme listesine girer.</span></div>
+    ${L.length?`<div class="tbl-wrap"><table><thead><tr>${bas("kod","Kod")}${bas("ad","Şirket")}${bas("fiyat","Fiyat",1)}${bas("degisim","Günlük",1)}<th></th></tr></thead><tbody>${list.map(x=>`<tr><td><b>${esc(x.kod)}</b></td><td class="small">${esc(x.ad||"")}</td><td class="n num">${x.fiyat!=null?PX(x.fiyat):"—"}</td><td class="n num ${cls(x.degisim)}">${x.degisim!=null?PCT(x.degisim):"—"}</td><td class="n">${durum(x.kod)}</td></tr>`).join("")}</tbody></table></div>`
+      :`<div class="empty"><p>${S.bistYukleniyor?"BIST 100 listesi yükleniyor…":"Liste henüz alınmadı."}</p></div>`}
+  </section>`;
+}
+document.addEventListener("click",async ev=>{
+  const y=ev.target.closest("[data-bist-yenile]"); if(y){ bistYenile(true); return; }
+  const s=ev.target.closest("[data-bist-sira]"); if(s){ const k=s.dataset.bistSira; if(S.bistSira===k) S.bistYon=-(S.bistYon||1); else { S.bistSira=k; S.bistYon=k==="degisim"?-1:1; } renderMain(); return; }
+  const e=ev.target.closest("[data-bist-ekle]"); if(!e) return;
+  const kod=e.dataset.bistEkle; if(!KOD_RE.test(kod)) return;
+  if(S.demo){ await baslat(false); if(S.demo) return; }
+  if(!guard()) return;
+  if(S.defter.hisseler.some(h=>h.kod===kod)){ toast(kod+" zaten listede."); return; }
+  const x=((S.bist&&S.bist.liste)||[]).find(v=>v.kod===kod)||{};
+  S.defter.hisseler.push({kod,tip:"Hisse",ad:x.ad||"",hedef:null,stop:null,vergiSinifi:null});
+  commit(kod+" izleme listesine eklendi, fiyatı alınıyor…"); kodEklendi(kod);
+});
+document.addEventListener("input",ev=>{ if(ev.target.id!=="b-filtre") return; S.bistFiltre=ev.target.value; const pos=ev.target.selectionStart; renderMain(); const el=$("#b-filtre"); el.focus(); try{ el.setSelectionRange(pos,pos); }catch(e){} });

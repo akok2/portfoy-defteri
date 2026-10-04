@@ -14,7 +14,9 @@
     "dist:mac": "electron-builder --mac -c.productName=\"Portfoy Defteri\"",
     "dist:linux": "electron-builder --linux AppImage",
     "test": "node tests/e2e.js",
-    "test:canli": "node tests/canli-kaynaklar.js"
+    "test:birim": "node tests/birim-calistir.js",
+    "test:canli": "node tests/canli-kaynaklar.js",
+    "test:tutarlilik": "node tests/tutarlilik.js"
   },
   "dependencies": {
     "nodemailer": "^6.10.1"

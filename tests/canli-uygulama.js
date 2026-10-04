@@ -73,6 +73,25 @@ async function bekleKadar(fn, sn) { for (let i = 0; i < sn * 2; i++) { try { if 
   kontrol(tamam && fiyatlar.every(f => f.fiyat > 0), `Excel'den gelen ${fiyatlar.length} kodun hepsinin fiyatı geldi` + (tamam ? '' : ' — eksik: ' + fiyatlar.filter(f => !(f.fiyat > 0)).map(f => f.kod).join(', ')));
   kontrol(fiyatlar.filter(f => HISSELER.includes(f.kod)).every(f => f.dogrulama === 'iki-kaynak'), 'hisse fiyatları en az iki kaynakla doğrulandı');
   kontrol(fiyatlar.filter(f => FONLAR.includes(f.kod)).every(f => f.tip === 'Fon' && /TEFAS/.test(f.kaynak || '')), 'fonlar fon olarak kaydedildi ve TEFAS\'tan geldi');
+  // 4. dividend events (Yahoo) for the shares in the ledger, and the dividends offered for confirmation
+  const tem = await w.evaluate(async () => (await window.desktop.storeGet('piyasa/temettu')) || {});
+  const tv = tem.veriler || {};
+  satirlar.push('', '### Temettü olayları (son 10 yıl)', '', '| Kod | Temettü sayısı | Son temettü (hisse başı) | Bedelsiz / bölünme |', '|---|---|---|---|',
+    ...HISSELER.map(k => { const e = tv[k] || {}; const t = e.temettu || [], b = e.bolunme || []; return `| ${k} | ${t.length} | ${t.length ? t[t.length - 1][0] + ' · ' + t[t.length - 1][1] : '—'} | ${b.length ? b.map(x => x[0] + ' ×' + Math.round(x[1] * 1000) / 1000).join(', ') : '—'} |`; }));
+  kontrol(HISSELER.filter(k => (tv[k] && tv[k].temettu || []).length).length >= 3, `temettü olayları alındı (${HISSELER.filter(k => (tv[k] && tv[k].temettu || []).length).length}/${HISSELER.length} hissede)`);
+  await w.click('[data-tab="ozet"]'); await bekle(800);
+  const oneri = await w.evaluate(() => { const e = document.querySelector('#temettu-oneri'); return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; });
+  satirlar.push('', `Özet'te onaya sunulan temettüler: ${oneri ? oneri.slice(0, 600) : 'yok (alış tarihlerinden sonra temettü dağıtılmamış olabilir)'}`);
+  if (oneri) { await w.locator('#temettu-oneri').scrollIntoViewIfNeeded().catch(() => {}); await w.screenshot({ path: path.join(EKRAN, '6-bulunan-temettuler.png') }); }
+
+  // 5. BIST 100 page
+  await w.click('[data-tab="bist"]');
+  await bekleKadar(async () => (await w.$$('#main tbody tr')).length >= 95, 90);
+  const bist = await w.evaluate(() => ({ satir: document.querySelectorAll('#main tbody tr').length, fiyatli: [...document.querySelectorAll('#main tbody tr')].filter(r => /\d/.test(r.children[2] && r.children[2].textContent)).length, baslik: (document.querySelector('#main .panel-h') || {}).textContent || '' }));
+  satirlar.push('', `BIST 100 sayfası: ${bist.satir} hisse, ${bist.fiyatli} tanesinin fiyatı var · ${bist.baslik.replace(/\s+/g, ' ').trim()}`);
+  kontrol(bist.satir >= 95 && bist.fiyatli >= 95, `BIST 100 sayfası doldu (${bist.satir} hisse, ${bist.fiyatli} fiyatlı)`);
+  await w.screenshot({ path: path.join(EKRAN, '7-bist100.png') });
+
   await w.click('[data-tab="poz"]'); await bekle(800);
   await w.screenshot({ path: path.join(EKRAN, '4-pozisyonlar.png') });
   await w.click('[data-tab="ozet"]'); await bekle(800);

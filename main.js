@@ -5,6 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { Store } = require('./src/store');
 const prices = require('./src/prices');
+const zamanlama = require('./src/zamanlama');
 // Tests can replace internet access with recorded responses (never set in normal use).
 const sahteAg = process.env.PD_TEST_FIXTURES ? require('./src/test-fetch')(process.env.PD_TEST_FIXTURES) : null;
 const agFetch = (u, o) => sahteAg ? sahteAg(u, o) : fetcher.fetch(u, o);
@@ -165,9 +166,8 @@ async function sabahGorevi(neden, { raporuErtele = false } = {}) {
   let r;
   try { r = await runRefresh(neden); } catch (e) { r = { guncel: 0, toplam: 1, ozet: 'Fiyatlar alınamadı: ' + e.message }; }
   let rapor = 'kapalı';
-  const fiyatYok = r.toplam > 0 && r.guncel === 0;
   // no prices yet (offline, sources down): wait for the next try instead of mailing yesterday's numbers
-  if (settings.raporAktif && fiyatYok && raporuErtele) rapor = 'ertelendi, fiyatlar alınınca gönderilecek';
+  if (settings.raporAktif && !zamanlama.raporGonderilsin(settings, r, raporuErtele)) rapor = 'ertelendi, fiyatlar alınınca gönderilecek';
   else if (settings.raporAktif) {
     try { await mailGonder(await raporIste()); rapor = 'gönderildi'; }
     catch (e) { rapor = 'gönderilemedi: ' + e.message; if (Notification.isSupported()) new Notification({ title: 'Portföy Defteri', body: 'Sabah raporu gönderilemedi: ' + e.message }).show(); }
@@ -176,26 +176,16 @@ async function sabahGorevi(neden, { raporuErtele = false } = {}) {
   store.set('piyasa/durum', { ...d, ozet: `${r.ozet}. Rapor ${rapor}.` });
   return { ...r, rapor };
 }
-function bugunGun() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 // Runs once per day after the chosen time. If the computer was off or offline it catches up later,
 // retrying every 15 minutes until prices could be fetched (or the report sent).
 let gorevSuruyor = false, sonDeneme = 0;
 function zamanlayici() {
-  const d = new Date();
-  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  const haftaSonu = d.getDay() === 0 || d.getDay() === 6;
-  if (settings.haftaIci && haftaSonu) return;
-  if (hhmm < settings.raporSaati) return;
-  if (settings.sonOtomatikGun === bugunGun()) return;
-  if (gorevSuruyor || Date.now() - sonDeneme < 15 * 60 * 1000) return;
+  const simdi = new Date();
+  if (!zamanlama.calismali(simdi, settings, { suruyor: gorevSuruyor, sonDeneme })) return;
   gorevSuruyor = true; sonDeneme = Date.now();
-  // after three hours of retries the day is closed: the report goes out with the last known prices
-  const [sa, dk] = settings.raporSaati.split(':').map(Number);
-  const gec = (d.getHours() * 60 + d.getMinutes()) - (sa * 60 + dk) >= 180;
+  const gec = zamanlama.gecKaldi(simdi, settings.raporSaati);
   sabahGorevi('zamanlanmış', { raporuErtele: !gec }).then(r => {
-    const raporTamam = !settings.raporAktif || r.rapor === 'gönderildi';
-    const fiyatTamam = r.guncel > 0 || r.toplam === 0;
-    if ((fiyatTamam && raporTamam) || gec) { settings.sonOtomatikGun = bugunGun(); saveSettings(); }
+    if (zamanlama.gunTamam(settings, r, gec)) { settings.sonOtomatikGun = zamanlama.gun(new Date()); saveSettings(); }
   }).catch(() => {}).finally(() => { gorevSuruyor = false; });
 }
 
@@ -213,6 +203,7 @@ function registerIpc() {
     fs.writeFileSync(r.filePath, Buffer.from(bytes));
     return { ok: true, path: r.filePath };
   });
+  handle('bist100:yenile', () => prices.bist100(store, agFetch));
   handle('prices:refresh', kodlar => runRefresh('elle', Array.isArray(kodlar) ? kodlar.slice(0, 50).filter(k => k && /^[A-Z0-9]{2,8}$/.test(k.kod) && ['Hisse', 'Fon'].includes(k.tip)).map(k => ({ kod: k.kod, tip: k.tip })) : null));
   handle('prices:test', () => prices.testSources(agFetch));
   handle('settings:get', () => publicSettings());

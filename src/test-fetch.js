@@ -8,6 +8,6 @@ module.exports = dir => async (url, opts) => {
   const hit = map.find(m => anahtar.includes(m.match));
   if (!hit) return { ok: false, status: 404, json: async () => ({}), text: async () => '' };
   if (hit.status && hit.status >= 400) return { ok: false, status: hit.status, json: async () => ({}), text: async () => '' };
-  const body = fs.readFileSync(path.join(dir, hit.file), 'utf8');
-  return { ok: true, status: 200, json: async () => JSON.parse(body), text: async () => body };
+  const ham = fs.readFileSync(path.join(dir, hit.file)); const body = ham.toString('utf8');
+  return { ok: true, status: 200, json: async () => JSON.parse(body), text: async () => body, arrayBuffer: async () => ham.buffer.slice(ham.byteOffset, ham.byteOffset + ham.length) };
 };

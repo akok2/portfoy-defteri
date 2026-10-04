@@ -109,7 +109,8 @@ async function main() {
   kontrol(bosluk.length >= 2 && bosluk.every(x => x >= 12), 'özet ekranındaki bölümler arasında boşluk var (' + bosluk.join(', ') + ' px)');
   const yazi = await w.evaluate(() => getComputedStyle(document.querySelector('.kpi .v')).fontFamily);
   kontrol(!/mono|Menlo|Courier|Consolas/i.test(yazi), 'rakamlar sistem yazı tipiyle gösteriliyor (' + yazi + ')');
-  for (const t of ['ozet', 'poz', 'islem', 'nakit', 'vergi', 'rapor', 'ayar']) { await sekme(w, t); }
+  kontrol(!(await w.$('[data-tab="nakit"]')), 'nakit sekmesi kaldırıldı');
+  for (const t of ['ozet', 'poz', 'islem', 'bist', 'vergi', 'rapor', 'ayar']) { await sekme(w, t); }
   kontrol(errs.length === 0, 'tüm sekmeler hatasız açılıyor ' + (errs.length ? JSON.stringify(errs) : ''));
   const ag = await w.evaluate(async () => { try { await fetch('https://example.com'); return 'ulaştı'; } catch { return 'engelli'; } });
   kontrol(ag === 'engelli', 'uygulama ekranı internete bağlanamıyor');
@@ -117,8 +118,10 @@ async function main() {
 
   /* ---------------- 2. Ledger editing ---------------- */
   aktifTest = 'defter';
-  await w.click('[data-act="bos"]'); await bekle(500);
-  kontrol(!/örnek veriler/i.test(await metin(w, '#banner')), 'boş defter başlatıldı');
+  await sekme(w, 'poz');
+  await w.fill('#h-kod', 'KCHOL'); await w.click('#f-hisse button[type=submit]'); await bekle(800);
+  kontrol(!/örnek veriler/i.test(await metin(w, '#banner')), 'örnek verideyken kod eklemek boş defteri başlatıyor');
+  kontrol(/İzleme listesi 1/.test(await metin(w, '#main')) && /KCHOL/.test(await metin(w, '#main')), 'kod izleme listesine eklendi');
   await sekme(w, 'ayar');
   await w.fill('#k-ad', 'Test Kurum'); await w.selectOption('#k-tip', 'kademeli'); await bekle(100);
   await w.fill('#k-gun', '90'); await w.fill('#k-kademe', '50000 0,2\n0,15'); await w.uncheck('#k-bsmv');
@@ -144,7 +147,7 @@ async function main() {
   await islem('ASELS', 'Satış', '2026-05-05', '100', '130,25');
   await islem('THYAO', 'Temettü', '2026-06-01', '', '', '320');
   await islem('ASELS', 'Bedelsiz', '2026-06-15', '50');
-  await islem('AFT', 'Alış', '2026-03-01', '10000', '0,90');
+  await islem('AFT', 'Alış', '2026-03-01', '10.000', '0,90'); // Turkish thousands separator
   await islem('SISE', 'Alış', '2026-03-01', '10', '40');
   let tablo = await metin(w, '#main');
   kontrol((tablo.match(/Örnek kayıt/g) || []).length === 0, 'örnek kayıtlar boş deftere karışmadı');
@@ -158,11 +161,6 @@ async function main() {
   await w.click('[data-act="iptal"]'); await bekle(200);
   await w.fill('#i-lot', '0'); await w.selectOption('#i-tur', 'Alış'); await w.fill('#i-fiyat', '10'); await w.click('#f-islem button[type=submit]'); await bekle(200);
   kontrol(/sıfırdan büyük/.test(await w.textContent('#i-err')), 'sıfır lot reddediliyor');
-  await sekme(w, 'nakit');
-  await w.fill('#n-tutar', '100.000,00'); await w.click('#f-nakit button[type=submit]'); await bekle(250);
-  await w.selectOption('#n-tur', 'Kesinti'); await w.fill('#n-tutar', '12,5'); await w.click('#f-nakit button[type=submit]'); await bekle(250);
-  kontrol((await metin(w, '#main')).includes('100.000,00 TL'), 'Türkçe sayı biçimi (100.000,00) doğru okunuyor');
-  kontrol((await metin(w, '#main')).includes('12,50 TL'), 'kesinti kaydedildi');
 
   /* ---------------- 3. Prices ---------------- */
   aktifTest = 'fiyatlar';
@@ -176,7 +174,14 @@ async function main() {
   kontrol(tablo.includes('312,50') || tablo.includes('312,5'), 'THYAO fiyatı geldi');
   kontrol(/Elimdeki hisse ve fonlar/.test(tablo) && /İzleme listesi/.test(tablo), 'pozisyonlar bölümlere ayrılmış');
   kontrol(/1,056/.test(tablo), 'fon fiyatı (TEFAS) geldi');
+  kontrol(/AFT[^]*?Açık\s*10\.000\s*0,90/.test(tablo), '"10.000" yazılan lot on bin olarak kaydedildi');
   kontrol(/\+\d+,\d+%/.test(tablo), 'haftalık/aylık/yıllık getiri hesaplandı');
+  kontrol(tablo.includes('+6.200,00 TL'), 'THYAO kâr/zararı alış fiyatına göre, komisyonsuz: 100 × (312,50 − 250,50) = 6.200,00');
+  await w.click('[data-detay="ASELS"]'); await bekle(300);
+  const asels = await metin(w, '#overlay');
+  kontrol(/Gerçekleşen\s*\+3\.025,00 TL/.test(asels), 'satış kârı: 100 × (130,25 − 100) = 3.025,00 (komisyon hariç)');
+  kontrol(/85,7143/.test(asels), 'bedelsiz sonrası ortalama alış fiyatı: 30.000 / 350 = 85,7143');
+  await w.keyboard.press('Escape'); await bekle(200);
   await w.click('[data-detay="THYAO"]'); await bekle(300);
   kontrol(/2 kaynakla doğrulandı/.test(await metin(w, '#overlay')), 'iki kaynak doğrulama etiketi');
   await w.keyboard.press('Escape'); await bekle(200);
@@ -184,10 +189,28 @@ async function main() {
   const ozet = await metin(w, '#main');
   if (!/Dolar karşılığı/.test(ozet)) console.log('ÖZET:', ozet.slice(0, 700));
   kontrol(/Dolar karşılığı/.test(ozet), 'dolar karşılığı (TCMB) görünüyor');
-  kontrol(/Reel bakiye/.test(ozet) && /Ana paradan K\/Z/.test(ozet), 'ana para ve reel bakiye görünüyor');
+  kontrol(/Ödenen komisyon/.test(ozet) && /Toplam sonuç/.test(ozet) && !/Reel bakiye|Ana paradan/.test(ozet), 'özet: komisyon ayrı, toplam sonuç var, nakit kalemleri yok');
+  // dividends found from the price module's events, waiting for confirmation
+  const oneri = await metin(w, '#temettu-oneri').catch(() => '');
+  kontrol(/ASELS/.test(oneri) && /10\.04\.2026/.test(oneri) && /400,00 TL/.test(oneri) && /01\.09\.2026/.test(oneri) && !/20\.05\.2026/.test(oneri), 'temettüler bulundu (ASELS 400 lot × 1,00 brüt; bedelsiz geri düzeltildi), deftere girilmiş olan tekrar önerilmiyor');
+  kontrol(await w.inputValue('#temettu-oneri tr:has-text("ASELS") input') === '340,00', 'net temettü %15 stopajla önerildi (340,00)');
+  await w.click('#temettu-oneri tr:has-text("01.09.2026") [data-temettu-yoksay]'); await bekle(400);
+  await w.click('#temettu-oneri tr:has-text("ASELS") [data-temettu-ekle]'); await bekle(500);
+  kontrol(!(await w.$('#temettu-oneri')), 'onaylanan eklendi, yoksayılan bir daha önerilmiyor');
   await sekme(w, 'vergi');
   console.log('VERGİ:', (await metin(w, '#main')).slice(0, 400));
-  kontrol(/Temettü \(brüt\)/.test(await metin(w, '#main')) && /376,47/.test(await metin(w, '#main')), 'temettü brüt %15 stopajla geri hesaplandı (320 / 0,85 = 376,47)');
+  const vergi = await metin(w, '#main');
+  kontrol(/Temettü \(brüt\)/.test(vergi) && /376,47/.test(vergi) && /400,00/.test(vergi), 'temettü brüt %15 stopajla geri hesaplandı (320 / 0,85 = 376,47), onaylanan temettü listede');
+  kontrol(/Ödeyeceğin vergi burada hesaplanmaz/.test(vergi) && !/Beyan gerekmiyor|Beyan sınırı aşılıyor/.test(vergi), 'vergi sayfası ödenecek vergi ya da beyan hükmü vermiyor');
+  // BIST 100 page
+  await sekme(w, 'bist');
+  for (let i = 0; i < 20 && (await w.$$('#main tbody tr')).length < 100; i++) await bekle(300);
+  const bist = await metin(w, '#main');
+  kontrol((await w.$$('#main tbody tr')).length === 100 && /Borsa İstanbul listesi/.test(bist), 'BIST 100 sayfası 100 hisseyi listeliyor');
+  kontrol(/Portföyde/.test(await metin(w, '#main tbody tr:has-text("THYAO")')), 'portföydeki hisse işaretli');
+  await w.click('#main tbody tr:has-text("TUPRS") [data-bist-ekle]'); await bekle(3500);
+  await sekme(w, 'poz');
+  kontrol(/TUPRS/.test(await metin(w, '#main')) && /171,00/.test(await metin(w, '#main')), 'BIST 100 sayfasından izleme listesine eklendi ve fiyatı hemen geldi');
   await sekme(w, 'ayar');
   await w.click('[data-act="kaynak-test"]'); await bekle(2500);
   kontrol(((await metin(w, '#kaynak-sonuc')).match(/Çalışmıyor/g) || []).length === 0, 'kaynak testi ekranı çalışıyor');
@@ -200,16 +223,21 @@ async function main() {
   kontrol(fs.existsSync(indirilen), 'Excel dosyası kaydedildi');
   if (fs.existsSync(indirilen)) {
     const wb = XLSX.read(fs.readFileSync(indirilen));
-    kontrol(['Özet', 'Pozisyonlar', 'İşlemler', 'DATA', 'Nakit', 'Vergi', 'Ayarlar'].every(s => wb.SheetNames.includes(s)), 'Excel sayfaları: ' + wb.SheetNames.join(', '));
+    kontrol(['Özet', 'Pozisyonlar', 'İşlemler', 'DATA', 'Vergi', 'Ayarlar'].every(s => wb.SheetNames.includes(s)) && !wb.SheetNames.includes('Nakit'), 'Excel sayfaları: ' + wb.SheetNames.join(', '));
+    const pz = XLSX.read(fs.readFileSync(indirilen), { cellNF: true }).Sheets['Pozisyonlar'];
+    const kzHucre = Object.keys(pz).find(k => /^J\d+$/.test(k) && k !== 'J1' && pz[k].t === 'n');
+    kontrol(kzHucre && /₺/.test(pz[kzHucre].z || '') && /\* /.test(pz[kzHucre].z || ''), 'tutarlar Excel muhasebe biçiminde (' + (kzHucre && pz[kzHucre].z) + ')');
+    const yuzde = Object.keys(pz).find(k => /^K\d+$/.test(k) && k !== 'K1' && pz[k].t === 'n');
+    kontrol(yuzde && /%/.test(pz[yuzde].z || '') && Math.abs(pz[yuzde].v) < 5, 'yüzdeler gerçek yüzde biçiminde');
     const isl = XLSX.utils.sheet_to_json(wb.Sheets['İşlemler']);
-    kontrol(isl.length === 6, `İşlemler sayfasında 6 satır (bulunan ${isl.length})`);
+    kontrol(isl.length === 7, `İşlemler sayfasında 7 satır (bulunan ${isl.length})`);
     const t = wb.Sheets['İşlemler'].C2;
     kontrol(t && t.t === 'n' && t.w === '10.01.2026', 'tarihler gerçek Excel tarihi ve gün kaymıyor (' + (t && t.w) + ')');
   }
   await w.setInputFiles('#xl-in', indirilen); await bekle(1200);
   kontrol(/Excel'den yükle/.test(await metin(w, '#modal')), 'içe aktarma önizlemesi açıldı');
   await w.click('[data-act="ice-uygula"]'); await bekle(800);
-  kontrol(/0 işlem/.test(await w.textContent('#toast')) && /6 tekrar eden/.test(await w.textContent('#toast')), 'aynı dosya tekrar yüklenince işlemler çoğalmıyor');
+  kontrol(/0 işlem/.test(await w.textContent('#toast')) && /7 tekrar eden/.test(await w.textContent('#toast')), 'aynı dosya tekrar yüklenince işlemler çoğalmıyor');
   // a hand-made table: title rows, Turkish headers with units ("Fiyat (TL)", "İşlem Türü"), real Excel dates
   const elle = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(elle, XLSX.utils.aoa_to_sheet([['PORTFÖY ÖZETİ'], [], ['Hisse', 'Güncel Fiyat (TL)', 'Fiyat Tarihi', 'Net Lot'], ['KCHOL', 190, new Date(Date.UTC(2026, 8, 1)), 50]]), 'Portfoy');
@@ -283,7 +311,7 @@ async function main() {
   ({ app, w, errs } = await baslat(ud, fx));
   kontrol(!/örnek veriler/i.test(await metin(w, '#banner')), 'yeniden açılınca defter yerinde');
   await sekme(w, 'islem');
-  kontrol(/1506|1\.506/.test(await metin(w, '#tabs')), 'işlem sayısı korunmuş (1506)');
+  kontrol(/1507|1\.507/.test(await metin(w, '#tabs')), 'işlem sayısı korunmuş (1507)');
   for (let i = 0; i < 20 && mailler.length < 2; i++) await bekle(1000);
   kontrol(mailler.length === 2, 'saati geçmiş günlük rapor açılışta otomatik gönderildi');
   const a3 = JSON.parse(fs.readFileSync(path.join(ud, 'ayarlar.json'), 'utf8'));

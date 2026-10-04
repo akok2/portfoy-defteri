@@ -6,12 +6,13 @@ BIST hisseleri ve TEFAS fonları için kişisel portföy takibi. Windows ve macO
 
 - İşlem defteri: alış, satış, bedelsiz, temettü; aracı kurum, işlem grubu ve not.
 - Komisyon: sabit, oranlı ya da son X günün işlem hacmine göre kademeli; isteğe bağlı %5 BSMV.
-- Maliyet yöntemleri: ağırlıklı ortalama, FIFO ve net maliyet (eski Excel programının yöntemi).
-- Pozisyonlar: elimdekiler, satıp kapattıklarım ve izleme listesi ayrı gösterilir. Kâr/zarar, haftalık, aylık ve yıl içi getiri, hedef ve zarar-durdur uyarıları.
-- Nakit: para yatırma, çekme ve kesintiler; ana para, reel bakiye ve ana paradan kâr/zarar.
-- Türkiye vergisi (tahmini): BIST hisse kazancında %0 stopaj, temettüde %15 stopaj ve beyan sınırı kontrolü, fonlarda türe ve alış tarihine göre stopaj.
+- Kâr/zarar ortalama alış fiyatına göre: kâğıt üstü (fiyat − alış fiyatı) × lot, satışta (satış − alış fiyatı) × lot. Komisyon kâr/zarara katılmaz, ayrıca toplanır; Özet'teki "Toplam sonuç" komisyonu düşer. Bedelsiz paylar sıfır maliyetle eklenir ve ortalamayı düşürür.
+- Pozisyonlar: elimdekiler, satıp kapattıklarım ve izleme listesi ayrı gösterilir. Haftalık, aylık ve yıl içi fiyat değişimi, hedef ve zarar-durdur uyarıları.
+- Temettüler kendiliğinden bulunur: elinizde lot olduğu tarihlerde dağıtılan ve defterde olmayan temettüler Özet'te listelenir, onaylarsanız deftere eklenir (tutar tahminidir, düzeltilebilir).
+- BIST 100 sayfası: endeksteki tüm hisseler fiyat ve günlük değişimle; tek tıkla izleme listesine eklenir.
+- Vergi bilgisi: hisse ve fon kazançları, brüt temettüler ve kesilen stopajlar. Ödenecek gelir vergisi tüm yıllık gelire bağlı olduğu için hesaplanmaz.
 - Kayıt kontrolü: eksik alım ve mükerrer kayıt uyarıları.
-- Excel: dışa aktarma; eski Excel takip programının dosyasını ya da bu uygulamanın Excel'ini önizlemeli içe aktarma.
+- Excel: muhasebe biçimli dışa aktarma; eski Excel takip programının dosyasını, bu uygulamanın Excel'ini ya da kendi işlem tablonuzu önizlemeli içe aktarma.
 - Otomatik fiyat güncelleme: açılışta, istendiğinde ve her sabah belirlenen saatte. Uygulama arka planda çalışabilir.
 - İsteğe bağlı sabah e-posta raporu (kendi e-posta hesabınız üzerinden).
 
@@ -39,7 +40,7 @@ Mac'te uygulama paketinin adı "Portfoy Defteri" (ö harfi olmadan) olarak derle
   - Windows: `%APPDATA%\Portföy Defteri\defter.dat`
   - macOS: `~/Library/Application Support/Portföy Defteri/defter.dat`
 - Her gün otomatik şifreli yedek alınır (`yedekler` klasörü, son 14 gün).
-- Uygulama ekranı internete hiç bağlanamaz. İnternete yalnızca fiyat modülü çıkar ve gönderilen tek bilgi hisse ya da fon kodudur. Lot, maliyet, işlem ve nakit bilgisi hiçbir yere gönderilmez.
+- Uygulama ekranı internete hiç bağlanamaz. İnternete yalnızca fiyat modülü çıkar ve gönderilen tek bilgi hisse ya da fon kodudur. Lot, maliyet ve işlem bilgisi hiçbir yere gönderilmez.
 - Hesap, bulut, sunucu ya da istatistik toplama yoktur.
 - E-posta şifresi de anahtar deposunda şifreli tutulur.
 
@@ -50,6 +51,8 @@ Mac'te uygulama paketinin adı "Portfoy Defteri" (ö harfi olmadan) olarak derle
 | BIST hisseleri | Yahoo Finance (fiyat ve 1 yıllık günlük geçmiş); doğrulama için İş Yatırım ve TradingView |
 | TEFAS fonları | TEFAS (2026'daki yeni API; çalışmazsa eski uç nokta) |
 | Döviz (USD, EUR) | TCMB gösterge kurları |
+| Temettü ve bedelsiz olayları | Yahoo Finance |
+| BIST 100 listesi ve fiyatları | Borsa İstanbul endeks bileşen listesi; fiyatlar TradingView (gerekirse Yahoo) |
 
 Ana fiyat en az bir başka kaynakla %1,5 içinde uyuşursa fiyat "2 kaynakla doğrulandı" olarak işaretlenir. Uyuşmazlık, %10'dan büyük günlük hareket ya da güncellenemeyen fiyatlar uygulamada uyarı olarak görünür; eski fiyat silinmez. Gerekirse hisse detayından fiyat elle girilebilir.
 
@@ -76,6 +79,15 @@ Kendi hazırladığınız bir Excel tablosu da yüklenebilir: başlık satırın
 npm install
 npm start
 ```
+
+### Testler
+
+- `npm run test:birim`: hesaplama motoru (kâr/zarar, bedelsiz, eksik kayıt, temettü bulma, fon stopajı, Türkçe sayı ve Excel okuma), fiyat modülü (kaynak doğrulama, TEFAS, temettü olayları, BIST 100 listesi) ve sabah görevi kararları. Elektron gerekmez.
+- `npm test`: uygulamayı açıp kullanıcı gibi gezinen uçtan uca test (kayıtlı fiyat cevaplarıyla, internetsiz).
+- `npm run test:tutarlilik`: aynı defter için Özet, Pozisyonlar, hisse detayı, Vergi, Excel dosyası ve e-posta raporundaki rakamların elle hesaplanmış değerlerle ve birbirleriyle aynı olduğunu; hiçbir yerde örnek ya da hazır veri kalmadığını denetler.
+- `node tests/canli-uygulama.js`: uygulamanın içinden gerçek internete çıkıp fiyat, temettü ve BIST 100 verisini dener.
+
+GitHub Actions bunların hepsini Windows'ta ve macOS'ta paketlenmiş uygulama üzerinde çalıştırır; sonuçlar işin özet sayfasındadır.
 
 Ekran kodu `renderer/` klasöründedir. `tools/build-renderer.py`, claude.ai'deki Portföy Defteri sayfasından (`tools/artifact-source.html`) masaüstü sürümünü üretir; masaüstüne özgü ekranlar `tools/desktop-additions.js` içindedir.
 
