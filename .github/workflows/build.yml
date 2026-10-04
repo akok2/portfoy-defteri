@@ -18,6 +18,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Birim testleri (hesaplama, fiyat modülü, zamanlayıcı)
+        id: birim
+        continue-on-error: true
+        run: npm run test:birim
       - name: Uygulamayı paketle (kurulumsuz klasör)
         run: npx electron-builder --win --x64 --dir --publish never
       - name: Uçtan uca testler (gerçek Windows'ta, paketlenmiş uygulama)
@@ -27,6 +31,13 @@ jobs:
         run: |
           $env:PD_EXE = (Resolve-Path "dist/win-unpacked/PortfoyDefteri.exe").Path
           node tests/e2e.js
+      - name: Tutarlılık testi (ekran, Excel, e-posta aynı rakamı veriyor mu)
+        id: tutarlilik
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:PD_EXE = (Resolve-Path "dist/win-unpacked/PortfoyDefteri.exe").Path
+          node tests/tutarlilik.js
       - name: Canlı fiyat kaynaklarını dene
         if: always()
         continue-on-error: true
@@ -67,6 +78,7 @@ jobs:
           name: test-sonuclari-windows
           path: |
             test-sonuclari.json
+            tutarlilik-sonuclari.json
             canli-kaynaklar.json
             canli-uygulama.json
           if-no-files-found: ignore
@@ -77,7 +89,7 @@ jobs:
           path: ekran/*.png
           if-no-files-found: ignore
       - name: Test sonucu
-        if: steps.test.outcome != 'success' || steps.kurulum.outcome != 'success' || steps.canli.outcome != 'success'
+        if: steps.birim.outcome != 'success' || steps.test.outcome != 'success' || steps.tutarlilik.outcome != 'success' || steps.kurulum.outcome != 'success' || steps.canli.outcome != 'success'
         run: |
           echo "Başarısız kontrol var; ayrıntı için bu işin özet sayfasına bakın."
           exit 1
@@ -93,6 +105,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Birim testleri (hesaplama, fiyat modülü, zamanlayıcı)
+        id: birim
+        continue-on-error: true
+        run: npm run test:birim
       # macOS: the bundle name must be plain ASCII. With "ö" in the bundle name Electron cannot find its
       # helper processes and crashes at start (SIGTRAP). The window title and data folder stay "Portföy Defteri".
       - name: Uygulamayı paketle
@@ -109,6 +125,12 @@ jobs:
         if: steps.test.outcome != 'success'
         continue-on-error: true
         run: node tests/e2e.js
+      - name: Tutarlılık testi (ekran, Excel, e-posta aynı rakamı veriyor mu)
+        id: tutarlilik
+        continue-on-error: true
+        run: |
+          APP=$(ls -d dist/mac*/*.app | head -1)
+          PD_EXE="$(ls "$APP"/Contents/MacOS/* | head -1)" node tests/tutarlilik.js
       - name: Uygulamanın içinden canlı fiyat testi (gerçek internet)
         id: canli
         continue-on-error: true
@@ -128,6 +150,7 @@ jobs:
           name: test-sonuclari-mac
           path: |
             test-sonuclari.json
+            tutarlilik-sonuclari.json
             canli-uygulama.json
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
@@ -137,7 +160,7 @@ jobs:
           path: ekran/*.png
           if-no-files-found: ignore
       - name: Test sonucu
-        if: steps.test.outcome != 'success' || steps.canli.outcome != 'success'
+        if: steps.birim.outcome != 'success' || steps.test.outcome != 'success' || steps.tutarlilik.outcome != 'success' || steps.canli.outcome != 'success'
         run: |
           echo "Başarısız kontrol var; ayrıntı için bu işin özet sayfasına bakın."
           exit 1
