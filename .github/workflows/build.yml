@@ -12,8 +12,8 @@ jobs:
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -65,15 +65,17 @@ jobs:
         run: |
           $env:PD_EXE = if ($env:PD_KURULU) { $env:PD_KURULU } else { (Resolve-Path "dist/win-unpacked/PortfoyDefteri.exe").Path }
           node tests/canli-uygulama.js
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: PortfoyDefteri-Windows
           path: |
             dist/*.exe
             dist/*.zip
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+          retention-days: 14
+      - uses: actions/upload-artifact@v6
         if: always()
+        continue-on-error: true
         with:
           name: test-sonuclari-windows
           path: |
@@ -82,12 +84,15 @@ jobs:
             canli-kaynaklar.json
             canli-uygulama.json
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+          retention-days: 3
+      - uses: actions/upload-artifact@v6
         if: always()
+        continue-on-error: true
         with:
           name: ekran-goruntuleri-windows
           path: ekran/*.png
           if-no-files-found: ignore
+          retention-days: 3
       - name: Test sonucu
         if: steps.birim.outcome != 'success' || steps.test.outcome != 'success' || steps.tutarlilik.outcome != 'success' || steps.kurulum.outcome != 'success' || steps.canli.outcome != 'success'
         run: |
@@ -99,8 +104,8 @@ jobs:
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -137,15 +142,15 @@ jobs:
         run: |
           APP=$(ls -d dist/mac*/*.app | head -1)
           PD_EXE="$(ls "$APP"/Contents/MacOS/* | head -1)" node tests/canli-uygulama.js
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: PortfoyDefteri-macOS
-          path: |
-            dist/*.dmg
-            dist/*.zip
+          path: dist/*.dmg
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+          retention-days: 14
+      - uses: actions/upload-artifact@v6
         if: always()
+        continue-on-error: true
         with:
           name: test-sonuclari-mac
           path: |
@@ -153,12 +158,15 @@ jobs:
             tutarlilik-sonuclari.json
             canli-uygulama.json
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+          retention-days: 3
+      - uses: actions/upload-artifact@v6
         if: always()
+        continue-on-error: true
         with:
           name: ekran-goruntuleri-mac
           path: ekran/*.png
           if-no-files-found: ignore
+          retention-days: 3
       - name: Test sonucu
         if: steps.birim.outcome != 'success' || steps.test.outcome != 'success' || steps.tutarlilik.outcome != 'success' || steps.canli.outcome != 'success'
         run: |
