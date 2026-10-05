@@ -454,7 +454,13 @@ function duzenleniyor(kok){ const k=$(kok); if(!k) return false;
   return [...k.querySelectorAll("form input,form textarea")].some(i=>!/checkbox|radio|hidden|file/.test(i.type)&&i.value!==i.defaultValue)
     // a select with no "selected" attribute starts on its first option
     ||[...k.querySelectorAll("form select")].some(x=>{ const d=[...x.options].findIndex(o=>o.defaultSelected); return !x.multiple&&x.options.length&&x.selectedIndex!==(d<0?0:d); }); }
-function arkaPlanRender(){ if(!S.calc) S.calc=hesapla(S.defter); renderChips(); renderBanner(); renderTabs(); if(!duzenleniyor("#main")) renderMain(); if(!duzenleniyor("#overlay")) renderDrawer(); }
+// Background data (prices, dividends, status) never redraws a form the viewer is filling in. The redraw waits and
+// happens as soon as the form is back to what was drawn (cleared, submitted or left untouched).
+function arkaPlanRender(){ if(!S.calc) S.calc=hesapla(S.defter); renderChips(); renderBanner(); renderTabs();
+  if(duzenleniyor("#main")) S.bekleyenMain=true; else renderMain();
+  if(duzenleniyor("#overlay")) S.bekleyenDrawer=true; else renderDrawer(); }
+function bekleyenCiz(){ if(S.bekleyenMain&&!duzenleniyor("#main")) renderMain(); if(S.bekleyenDrawer&&!duzenleniyor("#overlay")) renderDrawer(); }
+setInterval(bekleyenCiz,700);
 function renderChips(){
   const f=S.piyasa?.guncelleme; const parts=[];
   const sorun=S.calc?Object.values(S.calc.poz).filter(p=>p.lot>0&&p.f&&!p.f.elle&&(p.f.eski||p.f.dogrulama==="uyusmazlik"||p.f.dogrulama==="supheli")).length:0;
@@ -478,7 +484,7 @@ function renderTabs(){
   $("#tabs").innerHTML=TABS.map(([k,l])=>`<button class="tab" role="tab" aria-selected="${S.tab===k}" data-tab="${k}">${l}${n[k]!=null?`<span class="count">${n[k]}</span>`:""}</button>`).join("");
 }
 function renderMain(){
-  const m=$("#main");
+  S.bekleyenMain=false; const m=$("#main");
   const fn={ozet:vOzet,poz:vPoz,islem:vIslem,vergi:vVergi,rapor:vRapor,ayar:vAyar,...EK_GORUNUM}[S.tab]||vOzet;
   m.innerHTML=fn();
 }
@@ -719,7 +725,7 @@ function spark(kod){
     <div class="row small muted" style="justify-content:space-between"><span>${fmtDate(pts[0][0])}</span><span>en düşük ${PX(mn)} · en yüksek ${PX(mx)}</span><span>${fmtDate(pts[pts.length-1][0])}</span></div>`;
 }
 function renderDrawer(){
-  const o=$("#overlay"); if(!S.detay){ o.innerHTML=""; return; }
+  S.bekleyenDrawer=false; const o=$("#overlay"); if(!S.detay){ o.innerHTML=""; return; }
   const kod=S.detay; const p=S.calc.poz[kod]; const h=S.defter.hisseler.find(x=>x.kod===kod)||{kod,tip:"Hisse"};
   if(!p){ S.detay=null; o.innerHTML=""; return; }
   const f=p.f; const tv=h.tip==="Fon"?`https://www.tefas.gov.tr/FonAnaliz.aspx?FonKod=${encodeURIComponent(kod)}`:`https://tr.tradingview.com/symbols/BIST-${encodeURIComponent(kod)}/`;

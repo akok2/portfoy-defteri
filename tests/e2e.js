@@ -181,7 +181,17 @@ async function main() {
   await sekme(w, 'ayar'); await w.fill('#k-ad', 'Yarım kalan yazı');
   await w.click('[data-act="fiyat-yenile"]'); await bekle(3000);
   kontrol(await w.inputValue('#k-ad') === 'Yarım kalan yazı', 'fiyatlar arka planda gelince doldurulan form silinmiyor');
-  await w.fill('#k-ad', ''); await sekme(w, 'ozet');
+  await w.fill('#k-ad', '');
+  // a price arriving while a form is half-filled is drawn as soon as the form is cleared, without any click
+  await sekme(w, 'poz'); await w.fill('#h-kod', 'YAZ');
+  const fOnce = await w.evaluate(() => window.desktop.storeGet('piyasa/fiyatlar'));
+  await w.evaluate(f => window.desktop.storeSet('piyasa/fiyatlar', { ...f, veriler: { ...f.veriler, THYAO: { ...f.veriler.THYAO, fiyat: 313.75 } } }), fOnce); await bekle(800);
+  kontrol(await w.inputValue('#h-kod') === 'YAZ', 'arka planda fiyat gelince yarım yazılmış kod silinmedi');
+  await w.fill('#h-kod', '');
+  for (let i = 0; i < 20 && !/313,75/.test(await metin(w, '#main')); i++) await bekle(200);
+  kontrol(/313,75/.test(await metin(w, '#main')), 'form boşalınca, beklemede kalan fiyat tıklamadan ekrana geldi');
+  await w.evaluate(f => window.desktop.storeSet('piyasa/fiyatlar', f), fOnce); await bekle(600);
+  await sekme(w, 'ozet');
   kontrol(/Fiyatlar: \d{2}\.\d{2}\.\d{4}/.test(await metin(w, '#chips')), 'fiyat güncelleme zamanı görünüyor');
   await sekme(w, 'poz');
   tablo = await metin(w, '#main');
