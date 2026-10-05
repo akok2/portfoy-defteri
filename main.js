@@ -37,7 +37,8 @@ function loadSettings() {
   try { settings = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsFile, 'utf8')) }; settings.smtp = { ...DEFAULTS.smtp, ...(settings.smtp || {}) }; }
   catch { settings = JSON.parse(JSON.stringify(DEFAULTS)); }
 }
-function saveSettings() { fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), { mode: 0o600 }); }
+// written to a temporary file and renamed, so a crash or a reader never sees a half-written file
+function saveSettings() { const tmp = settingsFile + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), { mode: 0o600 }); fs.renameSync(tmp, settingsFile); }
 function publicSettings() {
   const { smtp, ...rest } = settings;
   return { ...rest, kurtarma: store.kurtarma || null, smtp: { host: smtp.host, port: smtp.port, secure: smtp.secure, user: smtp.user, from: smtp.from, hasPass: !!smtp.passEnc }, sifreleme: store.encryptionAvailable(), veriKlasoru: app.getPath('userData'), surum: app.getVersion(), platform: process.platform };
@@ -124,6 +125,23 @@ function broadcast(channel, payload) { if (win && !win.isDestroyed()) win.webCon
 
 /* ---------- prices, report, schedule ---------- */
 let refreshing = null;
+// Codes in the ledger that have no price yet (just added by hand, from an Excel file or the BIST 100 page).
+// They are fetched right away instead of waiting for the morning run; a code is retried at most every 10 minutes.
+const eksikDenendi = new Map();
+function eksikKodlar() {
+  const d = store.get(`data/users/${UID}/defter`) || {}, v = (store.get('piyasa/fiyatlar') || {}).veriler || {};
+  return (d.hisseler || []).map(h => h && h.kod).filter(k => /^[A-Z0-9]{2,8}$/.test(k || '') && !v[k] && Date.now() - (eksikDenendi.get(k) || 0) > 10 * 60e3);
+}
+let eksikZaman = null;
+function eksikFiyatKontrol() {
+  clearTimeout(eksikZaman);
+  eksikZaman = setTimeout(async () => {
+    if (refreshing) { try { await refreshing; } catch (e) {} }
+    const k = eksikKodlar(); if (!k.length) return;
+    k.forEach(x => eksikDenendi.set(x, Date.now()));
+    runRefresh('yeni kod').catch(() => {});
+  }, 1500);
+}
 // ekKodlar: codes shown on screen while the ledger is still empty (the sample portfolio on first launch).
 function runRefresh(neden, ekKodlar) {
   if (refreshing) return refreshing;
@@ -238,7 +256,7 @@ app.whenReady().then(() => {
   // Price requests use their own session (system proxy settings still apply).
   iz('fiyat oturumu');
   fetcher = session.fromPartition('fiyat-kaynaklari');
-  store.on('change', (p, data) => broadcast('store:changed', { path: p, data }));
+  store.on('change', (p, data) => { broadcast('store:changed', { path: p, data }); if (p === `data/users/${UID}/defter`) eksikFiyatKontrol(); });
   store.on('error', e => { broadcast('durum', { kayitHatasi: e.message }); if (Notification.isSupported()) new Notification({ title: 'Portföy Defteri', body: 'Değişiklikler diske yazılamadı: ' + e.message }).show(); });
   // macOS needs an application menu for copy/paste shortcuts in text fields; Windows needs none.
   iz('menü');
@@ -255,7 +273,7 @@ app.whenReady().then(() => {
   // Refresh on start when prices are older than 12 hours, then check the schedule every minute.
   const f = store.get('piyasa/fiyatlar');
   const yas = f && f.guncelleme ? (() => { const m = /(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2})/.exec(f.guncelleme); return m ? Date.now() - new Date(+m[3], m[2] - 1, +m[1], +m[4], +m[5]).getTime() : Infinity; })() : Infinity;
-  setTimeout(() => { if (yas > 12 * 3600e3) runRefresh('açılış').catch(() => {}); zamanlayici(); }, 4000);
+  setTimeout(() => { if (yas > 12 * 3600e3 || eksikKodlar().length) runRefresh('açılış').catch(() => {}); zamanlayici(); }, 4000);
   setInterval(zamanlayici, 60 * 1000);
   powerMonitor.on('resume', () => setTimeout(zamanlayici, 20000));
   app.on('activate', showWindow);

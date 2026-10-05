@@ -10,5 +10,5 @@ module.exports = function yukle() {
   const motor = parca('const $ = s =>', '/* ---------- persistence ---------- */');
   const okuyucu = parca('const normH=', 'function bankaOku(');
   const ctx = vm.createContext({ console, Intl, Date, Math, JSON, Number, String, Map, Set, Object, Array, isFinite, parseInt, parseFloat, RegExp, document: { querySelector: () => null } });
-  return vm.runInContext(`"use strict";\n${motor}\n${okuyucu}\n;({ hesapla, temettuBul, fiyatOf, S, ORNEK, BOS, parseNum, islemOku, tarihIso, turNorm, tahminTip, normH, normB, fonOran, fonDonemOrani, temettuOran, getiri, today })`, ctx, { filename: 'renderer/app.js (bölümler)' });
+  return vm.runInContext(`"use strict";\n${motor}\n${okuyucu}\n;({ hesapla, temettuBul, kodNorm, kodHatasi, fiyatOf, S, ORNEK, BOS, parseNum, islemOku, tarihIso, turNorm, tahminTip, normH, normB, fonOran, fonDonemOrani, temettuOran, getiri, today })`, ctx, { filename: 'renderer/app.js (bölümler)' });
 };

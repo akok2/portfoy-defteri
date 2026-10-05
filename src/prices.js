@@ -243,11 +243,13 @@ async function pool(items, n, fn) {
 
 // Bigpara answers HTTP 403 to these requests (seen from Türkiye and abroad), so it is no longer queried.
 const HISSE_KAYNAKLARI = [['Yahoo', yahoo], ['TradingView', tradingview], ['İş Yatırım', isyatirim]];
+// A source that answered "no such code" (as opposed to a network or server problem).
+const BULUNAMADI_RE = /HTTP 404|fiyat yok|yanıt boş|bulunamad|fiyat alanı/;
 async function stockQuote(http, kod) {
   const res = await Promise.allSettled(HISSE_KAYNAKLARI.map(([, fn]) => fn(http, kod)));
   const ok = res.filter(r => r.status === 'fulfilled').map(r => r.value);
   const hatalar = res.map((r, i) => r.status === 'rejected' ? `${HISSE_KAYNAKLARI[i][0]}: ${r.reason && r.reason.message || r.reason}` : null).filter(Boolean);
-  if (!ok.length) return { kod, hata: hatalar.join('; ') };
+  if (!ok.length) return { kod, hata: hatalar.join('; '), bulunamadi: hatalar.every(h => BULUNAMADI_RE.test(h)) };
   // Main price: Yahoo when available (it also brings the daily history), otherwise the first source that answered.
   const ana = ok[0], digerleri = ok.slice(1);
   let dogrulama = 'tek-kaynak', not = '';
@@ -267,7 +269,7 @@ async function fundQuote(http, kod) {
     let dogrulama = 'tek-kaynak', not = '';
     if (q.onceki > 0 && Math.abs(q.fiyat / q.onceki - 1) > 0.15) { dogrulama = 'supheli'; not = 'Günlük hareket %15\'ten büyük, kontrol edin'; }
     return { kod, ...q, dogrulama, not };
-  } catch (e) { return { kod, hata: `TEFAS: ${e.message}` }; }
+  } catch (e) { return { kod, hata: `TEFAS: ${e.message}`, bulunamadi: /yeni API: (fon bulunamad|HTTP 404|yanıt boş)/.test(e.message) || /^fon bulunamad/.test(e.message) }; }
 }
 
 // Refresh every code in the ledger. `store` is the local Store.
@@ -286,7 +288,7 @@ async function refresh(store, fetchImpl, uid = 'local', ekKodlar = null) {
     const digerUygun = tip === 'Fon' ? kod.length >= 4 : kod.length === 3;
     if (!digerUygun) return q;
     const diger = tip === 'Fon' ? await stockQuote(http, kod) : await fundQuote(http, kod);
-    return diger.hata ? q : { ...diger, uyari: `${kod} ${tip === 'Fon' ? 'fon' : 'hisse'} olarak kayıtlı ama ${tip === 'Fon' ? 'hisse' : 'fon'} fiyatı bulundu; hisse detayından türünü düzeltin.` };
+    return diger.hata ? { ...q, bulunamadi: q.bulunamadi && diger.bulunamadi } : { ...diger, uyari: `${kod} ${tip === 'Fon' ? 'fon' : 'hisse'} olarak kayıtlı ama ${tip === 'Fon' ? 'hisse' : 'fon'} fiyatı bulundu; hisse detayından türünü düzeltin.` };
   });
   let doviz = null, dovizHata = null;
   try { doviz = await tcmb(http); } catch (e) { dovizHata = e.message; }
@@ -320,8 +322,12 @@ async function refresh(store, fetchImpl, uid = 'local', ekKodlar = null) {
     await pool(hisseler, 4, async kod => { try { tv[kod] = await temettuOlaylari(http, kod); tGuncel++; } catch (e) {} });
     if (tGuncel) store.set('piyasa/temettu', { guncelleme: t.tr, veriler: tv });
   }
-  const ozet = !kodlar.length ? 'Defterde fiyatı çekilecek hisse ya da fon yok. Önce bir alış girin ya da Excel\'den yükleyin.' : `${guncel}/${kodlar.length} fiyat güncellendi (${iki} iki kaynakla doğrulandı)` + (basarisiz.length ? `. Güncellenemeyen: ${basarisiz.join(', ')}` : '') + (dovizHata ? `. Döviz kuru alınamadı (${dovizHata})` : '');
-  const durum = { ...(store.get('piyasa/durum') || {}), sonCalisma: t.tr, ozet, ayrinti: sonuc.filter(s => s.hata || s.uyari).map(s => `${s.kod}: ${s.hata || s.uyari}`).slice(0, 60) };
+  const ozet = !kodlar.length ? 'Defterde fiyatı çekilecek hisse ya da fon yok. Önce bir alış girin ya da Excel\'den yükleyin.' : `${guncel}/${kodlar.length} fiyat güncellendi (${iki} iki kaynakla doğrulandı)` + (() => { const yok = sonuc.filter(x => x.hata && x.bulunamadi).map(x => x.kod), diger = basarisiz.filter(k => !yok.includes(k));
+    return (yok.length ? `. Hiçbir kaynakta bulunamayan kod: ${yok.join(', ')} (yazımını kontrol edin)` : '') + (diger.length ? `. Güncellenemeyen: ${diger.join(', ')}` : ''); })() + (dovizHata ? `. Döviz kuru alınamadı (${dovizHata})` : '');
+  // per code: why the last try failed, and whether every source said the code does not exist (likely a typo)
+  const kodHata = {};
+  for (const s of sonuc) if (s.hata) kodHata[s.kod] = { mesaj: s.hata.slice(0, 300), bulunamadi: !!s.bulunamadi, tarih: t.tr };
+  const durum = { ...(store.get('piyasa/durum') || {}), sonCalisma: t.tr, ozet, kodHata, ayrinti: sonuc.filter(s => s.hata || s.uyari).map(s => `${s.kod}: ${s.hata || s.uyari}`).slice(0, 60) };
   store.set('piyasa/durum', durum);
   return { guncel, toplam: kodlar.length, iki, basarisiz, dovizHata, ozet };
 }

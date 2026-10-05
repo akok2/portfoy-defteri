@@ -102,7 +102,8 @@ function ekranKodlari(){ if(!S.demo) return null; const m=new Map(); for(const h
 function ornekFiyatlari(){ if(!DESKTOP||!S.demo) return; const v=(S.piyasa&&S.piyasa.veriler)||{}; const k=ekranKodlari()||[]; if(k.length&&k.some(x=>!v[x.kod])) window.desktop.refreshPrices(k).catch(()=>{}); }
 
 // A code was added on screen: fetch its price right away instead of waiting for the morning run.
-function kodEklendi(kod){ if(!DESKTOP) return; setTimeout(()=>{ window.desktop.refreshPrices(ekranKodlari()).catch(()=>{}); },1200); }
+// (the price module notices codes without a price as soon as the ledger is saved and fetches them; see main.js)
+function kodEklendi(kod){}
 
 /* ---------- BIST 100 page (desktop only) ---------- */
 if(DESKTOP){ TABS.splice(3,0,["bist","BIST 100"]); EK_GORUNUM.bist=vBist; }

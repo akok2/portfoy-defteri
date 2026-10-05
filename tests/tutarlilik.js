@@ -79,6 +79,10 @@ async function main() {
   await w.setInputFiles('#xl-in', dosya); await bekle(1200);
   kontrol(/10 işlem/.test(await metin(w, '#modal')), 'önizleme 10 işlem');
   await w.click('[data-act="ice-uygula"]'); await bekle(1500);
+  // SISE is not in the sample portfolio: its price must arrive by itself after the import
+  await sekme(w, 'poz');
+  for (let i = 0; i < 30 && !/44,10/.test(await metin(w, '#main')); i++) await bekle(300);
+  kontrol(/44,10/.test(await metin(w, '#main')), 'Excel\'den gelen yeni kodun fiyatı güncellemeye basmadan geldi');
   await w.click('[data-act="fiyat-yenile"]'); await bekle(4000);
   for (let i = 0; i < 20 && !/Fiyatlar: \d/.test(await metin(w, '#chips')); i++) await bekle(500);
 

@@ -111,3 +111,15 @@ test('kaynak testi beş kaynağı dener (Bigpara yok)', async () => {
   assert.deepEqual(r.map(x => x.ad.split(' ')[0]), ['Yahoo', 'TradingView', 'İş', 'TEFAS', 'TCMB']);
   assert.ok(r.every(x => !x.ok));
 });
+
+test('bulunamayan kod ile bağlantı hatası ayrılır, düzelince kayıt silinir', async () => {
+  const st = depo({ 'data/users/local/defter': { hisseler: [{ kod: 'ECZLC', tip: 'Hisse' }, { kod: 'THYAO', tip: 'Hisse' }, { kod: 'ZZZ', tip: 'Fon' }] } });
+  // ECZLC: every source says "no such code"; THYAO: network down; ZZZ: TEFAS has no such fund
+  await P.refresh(st, sahte([['ECZLC.IS', 404], ['"BIST:ECZLC"', { data: [] }], ['endeks=ECZLC', []], ['THYAO', () => { throw new Error('fetch failed'); }], ['fonFiyatBilgiGetir', { resultList: [] }], ['fonGnlBlgSiraliGetir', { resultList: [] }], ['BindHistoryInfo', 404]]));
+  const h = st.d['piyasa/durum'].kodHata;
+  assert.equal(h.ECZLC.bulunamadi, true); assert.match(h.ECZLC.mesaj, /HTTP 404/);
+  assert.equal(h.THYAO.bulunamadi, false, 'bağlantı hatası "bulunamadı" sayılmaz');
+  assert.equal(h.ZZZ.bulunamadi, true, 'TEFAS\'ta olmayan fon');
+  await P.refresh(st, sahte([['THYAO.IS', yahoo(300, 297)], ['ECZLC.IS', 404], ['fonFiyatBilgiGetir', { resultList: [] }]]));
+  assert.equal(st.d['piyasa/durum'].kodHata.THYAO, undefined, 'fiyatı gelen kodun hata kaydı kalktı');
+});
