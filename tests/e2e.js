@@ -102,7 +102,8 @@ async function main() {
   let { app, w, errs } = await baslat(ud, fx);
   kontrol(await w.title() === 'Portföy Defteri', 'pencere başlığı');
   kontrol(/örnek veriler/i.test(await metin(w, '#banner')), 'ilk açılışta örnek veri uyarısı görünüyor');
-  kontrol(!/SASA|MOGAN|OSTIM|YKBNK/.test(await w.content()), 'kişisel örnek veri yok');
+  { const izinli = ['THYAO', 'ASELS', 'TUPRS', 'AFT', 'GARAN', 'BIMAS']; await sekme(w, 'poz'); const kodlar = await w.evaluate(() => [...document.querySelectorAll('[data-detay]')].map(b => b.dataset.detay)); await sekme(w, 'ozet');
+    kontrol(kodlar.length > 0 && kodlar.every(k => izinli.includes(k)), 'örnek ekranda yalnız izinli örnek kodlar var (' + [...new Set(kodlar)].join(', ') + ')'); }
   for (let i = 0; i < 20 && !/Fiyatlar: \d/.test(await metin(w, '#chips')); i++) await bekle(500);
   kontrol(/Fiyatlar: \d/.test(await metin(w, '#chips')), 'ilk açılışta örnek hisselerin fiyatları kendiliğinden geliyor');
   const bosluk = await w.evaluate(() => { const c = [...document.querySelector('#main').children]; return c.slice(1).map((e, i) => Math.round(e.getBoundingClientRect().top - c[i].getBoundingClientRect().bottom)); });
@@ -122,6 +123,16 @@ async function main() {
   await w.fill('#h-kod', 'KCHOL'); await w.click('#f-hisse button[type=submit]'); await bekle(800);
   kontrol(!/örnek veriler/i.test(await metin(w, '#banner')), 'örnek verideyken kod eklemek boş defteri başlatıyor');
   kontrol(/İzleme listesi 1/.test(await metin(w, '#main')) && /KCHOL/.test(await metin(w, '#main')), 'kod izleme listesine eklendi');
+  // KCHOL is not in the recorded answers: every source says "no such code", which must be said plainly and right away
+  for (let i = 0; i < 20 && !/kod bulunamadı/.test(await metin(w, '#main')); i++) await bekle(300);
+  kontrol(/kod bulunamadı/.test(await metin(w, '#main')), 'yanlış kod birkaç saniye içinde "kod bulunamadı" diye işaretlendi (fiyat güncellemeye basmadan)');
+  await w.fill('#h-kod', 'ecİlc'); await w.dispatchEvent('#h-kod', 'input');
+  kontrol(await w.inputValue('#h-kod') === 'ECILC', 'Türkçe klavyeyle yazılan kod düzeltiliyor (ecİlc → ECILC)');
+  await w.fill('#h-kod', '');
+  await w.click('[data-detay="KCHOL"]'); await bekle(300);
+  kontrol(/hiçbir fiyat kaynağında bulunamadı/.test(await metin(w, '#overlay')), 'hisse detayında nedeni yazıyor');
+  await w.click('[data-act="hisse-sil"]'); await bekle(100); await w.click('[data-act="hisse-sil"]'); await bekle(400);
+  kontrol(!/KCHOL/.test(await metin(w, '#main')), 'yanlış kod silindi');
   await sekme(w, 'ayar');
   await w.fill('#k-ad', 'Test Kurum'); await w.selectOption('#k-tip', 'kademeli'); await bekle(100);
   await w.fill('#k-gun', '90'); await w.fill('#k-kademe', '50000 0,2\n0,15'); await w.uncheck('#k-bsmv');
@@ -135,6 +146,9 @@ async function main() {
   kontrol(/zaten listede/.test(await w.textContent('#h-err')), 'aynı kod iki kez eklenemiyor');
   await w.fill('#h-kod', 'X!'); await w.click('#f-hisse button[type=submit]'); await bekle(200);
   kontrol(/2–8 harf/.test(await w.textContent('#h-err')), 'geçersiz kod reddediliyor');
+  await w.fill('#h-kod', ''); // a half-typed form is never redrawn under the user; clear it so the table can refresh
+  for (let i = 0; i < 20 && !/44,10/.test(await metin(w, '#main')); i++) await bekle(300);
+  kontrol(/44,10/.test(await metin(w, '#main')), 'yeni eklenen kodun (SISE) fiyatı güncellemeye basmadan geldi');
   await sekme(w, 'islem');
   async function islem(kod, tur, tarih, lot, fiyat, tutar) {
     await w.selectOption('#i-kod', kod); await w.fill('#i-tarih', tarih); await w.selectOption('#i-tur', tur); await bekle(80);
@@ -314,6 +328,8 @@ async function main() {
   kontrol(/1507|1\.507/.test(await metin(w, '#tabs')), 'işlem sayısı korunmuş (1507)');
   for (let i = 0; i < 20 && mailler.length < 2; i++) await bekle(1000);
   kontrol(mailler.length === 2, 'saati geçmiş günlük rapor açılışta otomatik gönderildi');
+  { const d = await w.evaluate(() => window.desktop.storeGet('piyasa/durum')); const f = await w.evaluate(() => window.desktop.storeGet('piyasa/fiyatlar'));
+    kontrol(/fiyat güncellendi/.test(d && d.ozet || '') && /Rapor gönderildi/.test(d && d.ozet || '') && f && f.veriler && f.veriler.THYAO && f.veriler.THYAO.fiyat === 312.5, 'sabah görevi önce fiyatları çekti, sonra raporu gönderdi (' + (d && d.ozet) + ')'); }
   const a3 = JSON.parse(fs.readFileSync(path.join(ud, 'ayarlar.json'), 'utf8'));
   kontrol(a3.sonOtomatikGun === new Date().toLocaleDateString('sv-SE'), 'aynı gün ikinci kez gönderilmeyecek şekilde işaretlendi');
   await kapat(app);
@@ -336,6 +352,56 @@ async function main() {
   ({ app, w, errs } = await baslat(ud, fx));
   kontrol(/yedekten açıldı/.test(await metin(w, '#banner')), 'bozuk dosyada yedekten açılıp kullanıcıya söyleniyor');
   kontrol(!/örnek veriler/i.test(await metin(w, '#banner')), 'yedekteki defter geri geldi');
+  await kapat(app);
+
+  /* ---------------- 7. Excel without dates, undated trades ---------------- */
+  aktifTest = 'tarihsiz excel';
+  const ud2 = path.join(tmp, 'tarihsiz');
+  ({ app, w, errs } = await baslat(ud2, fx));
+  const basit = XLSX.utils.book_new();
+  // a plain holdings list: no date column, no trade type; one row without a lot
+  XLSX.utils.book_append_sheet(basit, XLSX.utils.aoa_to_sheet([['Hisse', 'Adet', 'Maliyet'], ['THYAO', 200, 270], ['ASELS', '1.000', '100,50'], ['SISE', 500, 40], ['TUPRS', '', 160]]), 'Portföyüm');
+  const basitYol = path.join(tmp, 'tarihsiz liste.xlsx'); fs.writeFileSync(basitYol, XLSX.write(basit, { type: 'buffer', bookType: 'xlsx' }));
+  await w.setInputFiles('#xl-in', basitYol); await bekle(1200);
+  const basitOn = await metin(w, '#modal');
+  kontrol(/3 işlem/.test(basitOn) && /3 işlemde tarih yok/.test(basitOn) && /tarih yok/.test(basitOn), 'tarih sütunu olmayan liste okunuyor, tarihsiz olduğu söyleniyor');
+  kontrol(/satır 5 \(lot yok\)/.test(basitOn), 'okunamayan satırın numarası ve nedeni yazıyor');
+  await w.click('[data-act="ice-uygula"]'); await bekle(800);
+  await sekme(w, 'poz');
+  for (let i = 0; i < 30 && !/312,50/.test(await metin(w, '#main')); i++) await bekle(300);
+  const tp = await metin(w, '#main');
+  // (price − purchase price) × lot: THYAO 200 × 42,50; ASELS 1 000 × 40,70; SISE 500 × 4,10
+  kontrol(tp.includes('+8.500,00 TL') && tp.includes('+40.700,00 TL') && tp.includes('+2.050,00 TL'), 'tarihsiz alışlarda kâr/zarar alış fiyatına göre: 8.500 + 40.700 + 2.050');
+  await sekme(w, 'ozet');
+  kontrol(/Kâğıt üstü kâr\/zarar\s*\+51\.250,00 TL/.test(await metin(w, '#main')), 'özet: kâğıt üstü kâr/zarar 51.250,00');
+  kontrol(!(await w.$('#temettu-oneri')), 'tarihsiz alış için geçmiş temettüler önerilmiyor (alındığı gün bilinmiyor)');
+  // a sale typed by hand without a date
+  await sekme(w, 'islem');
+  kontrol(((await metin(w, '#main')).match(/tarih yok/g) || []).length === 3, 'işlemler listesinde "tarih yok" yazıyor');
+  await w.selectOption('#i-kod', 'THYAO'); await w.fill('#i-tarih', ''); await w.selectOption('#i-tur', 'Satış');
+  await w.fill('#i-lot', '50'); await w.fill('#i-fiyat', '320'); await w.click('#f-islem button[type=submit]'); await bekle(600);
+  kontrol(/THYAO satış kaydedildi/.test(await w.textContent('#toast')) && !(await metin(w, '#i-err')), 'tarihi boş bırakılan satış kaydedildi');
+  await w.click('[data-detay="THYAO"]'); await bekle(300);
+  const thy = await metin(w, '#overlay');
+  kontrol(/Gerçekleşen\s*\+2\.500,00 TL/.test(thy) && /tarih yok/.test(thy), 'tarihsiz satış: 50 × (320 − 270) = 2.500,00 gerçekleşen');
+  await w.keyboard.press('Escape'); await bekle(200);
+  await sekme(w, 'vergi');
+  kontrol(await w.$('#v-yil option:text-is("Tarihsiz")') !== null, 'vergi sayfasında "Tarihsiz" yılı var');
+  await w.selectOption('#v-yil', 'Tarihsiz'); await bekle(300);
+  const vt = await metin(w, '#main');
+  kontrol(/tarihi girilmemiş/.test(vt) && /\+2\.500,00 TL/.test(vt), 'tarihsiz satış vergi sayfasında ayrı gösteriliyor');
+  // export and re-import: undated rows stay undated and are not duplicated
+  const indirilen2 = path.join(tmp, 'tarihsiz-disa.xlsx');
+  await app.evaluate(({ dialog }, hedef) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: hedef }); }, indirilen2);
+  await sekme(w, 'ayar'); await w.click('[data-act="xlsx-disa"]'); await bekle(1500);
+  if (fs.existsSync(indirilen2)) {
+    const isl2 = XLSX.utils.sheet_to_json(XLSX.read(fs.readFileSync(indirilen2)).Sheets['İşlemler'], { defval: '' });
+    kontrol(isl2.length === 4 && isl2.every(r => r.TARIH === ''), 'Excel\'de tarihsiz işlemlerin tarihi boş');
+  } else kontrol(false, 'tarihsiz defter Excel\'e aktarılamadı');
+  await w.setInputFiles('#xl-in', indirilen2); await bekle(1200);
+  kontrol(/4 işlem zaten var/.test(await metin(w, '#modal')), 'aynı dosya yeniden yüklenince tarihsiz işlemler tekrar sayılmıyor');
+  await w.click('[data-act="ice-kapat-btn"]'); await bekle(300);
+  kontrol(errs.length === 0, 'hata yok ' + (errs.length ? JSON.stringify(errs) : ''));
   await kapat(app);
 
   aktifTest = 'tek kopya';

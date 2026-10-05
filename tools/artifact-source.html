@@ -63,6 +63,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 /* banner */
 .banner{display:flex;flex-wrap:wrap;align-items:center;gap:12px;justify-content:space-between;padding:12px 14px;border-radius:10px;background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
 .banner.err{background:var(--loss-soft);border-color:color-mix(in srgb,var(--loss) 35%,transparent)}
+.banner.warn{background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 35%,transparent)}
 .banner p{max-width:70ch}
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
@@ -208,17 +209,19 @@ const fmtDate = s => { if(!s) return "—"; const m=/^(\d{4})-(\d{2})-(\d{2})/.e
 const uid6 = () => Math.random().toString(36).slice(2,8)+Date.now().toString(36).slice(-4);
 function parseNum(v){
   if(v==null) return NaN; if(typeof v==="number") return v;
-  let s=String(v).replace(/TL|₺|%|\s/gi,"").trim(); if(!s || s==="-") return NaN;
+  let s=String(v).replace(/TL|₺|%|LOT|ADET|\s/gi,"").trim(); if(!s || s==="-") return NaN;
   if(s.includes(",")){ s=s.replace(/\./g,"").replace(",","."); }
   else if(/^-?[1-9]\d{0,2}(\.\d{3})+$/.test(s)){ s=s.replace(/\./g,""); }
   return Number(s);
 }
 const EMAIL_RE=/^[^\s@<>"',;]+@[^\s@<>"',;]+\.[A-Za-z]{2,}$/;
 const KOD_RE=/^[A-Z0-9]{2,8}$/;
+// Codes typed on a Turkish keyboard or copied from elsewhere: "ecİlc", "BIST:ECILC", "ECILC.IS" → "ECILC"
+const kodNorm=v=>String(v??"").trim().toUpperCase().replace(/İ/g,"I").replace(/Ş/g,"S").replace(/Ğ/g,"G").replace(/Ü/g,"U").replace(/Ö/g,"O").replace(/Ç/g,"C").replace(/\s+/g,"").replace(/^BIST:/,"").replace(/\.(IS|E)$/,"");
 const TYPES=["Alış","Satış","Bedelsiz","Temettü"];
 const PALETTE=["#2A45A8","#16794A","#B5651D","#7B3FA0","#1F7F8C","#A83255","#6B7A2A","#4F5B66"];
 let toastT;
-function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastT); toastT=setTimeout(()=>t.hidden=true,2600); }
+function toast(msg,ms=2600){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastT); toastT=setTimeout(()=>t.hidden=true,ms); }
 
 /* ---------- example data (shown until the viewer starts their own ledger) ---------- */
 const ORNEK = {
@@ -274,7 +277,14 @@ function isGunuAcigi(a,b){ // weekdays strictly between two ISO dates
 const KALITE={"iki-kaynak":{t:"2 kaynakla doğrulandı",c:"ok"},"tek-kaynak":{t:"Tek kaynak",c:"neutral"},"uyusmazlik":{t:"Kaynaklar uyuşmuyor",c:"warn"},"supheli":{t:"Olağan dışı hareket",c:"warn"}};
 function kaliteHtml(f){ if(!f) return ""; if(f.elle) return `<span class="pill neutral">Elle girildi</span>`; const k=KALITE[f.dogrulama]; let h=k?`<span class="pill ${k.c}">${k.t}</span>`:""; if(f.eski) h+=` <span class="pill bad">Güncel değil</span>`; return h; }
 const gunFark=(a,b)=>Math.round((Date.parse(b)-Date.parse(a))/864e5);
+// Trades without a date: buys and bonus issues count as the oldest records, sales and dividends as the newest.
+// Profit by weighted-average purchase price does not depend on dates; only the split between realised and open profit does.
+const siraTarih=x=>x.tarih||(x.tur==="Satış"||x.tur==="Temettü"?"9999-12-31":"");
+const siraKarsilastir=(a,b)=>{ const x=siraTarih(a), y=siraTarih(b); return x<y?-1:x>y?1:(a.t||0)-(b.t||0); };
+const TARIHSIZ="Tarihsiz";
 function fonOran(sinif,alis,satis){
+  // an unknown purchase date is treated as a purchase just before the sale (current rate, short holding)
+  if(!satis) satis=today(); if(!alis) alis=satis;
   switch(sinif){
     case "hisseYogun": return 0;
     case "serbestHisse": return alis>="2026-03-27"?0.175:0;
@@ -283,7 +293,7 @@ function fonOran(sinif,alis,satis){
     default: return fonDonemOrani(alis);
   }
 }
-const temettuOran=t=>t>="2024-12-22"?0.15:0.10;
+const temettuOran=t=>!t||t>="2024-12-22"?0.15:0.10;
 const BEYAN_SINIRI_2026=400000;
 
 function getiri(kod,fiyat,gunGeri,yilBasi){
@@ -297,7 +307,7 @@ function getiri(kod,fiyat,gunGeri,yilBasi){
 function hesapla(d){
   const out={poz:{},satir:{},toplam:{},uyarilar:[],olaylar:[]};
   const hs=new Map(d.hisseler.map(h=>[h.kod,h]));
-  const list=[...d.islemler].sort((a,b)=> (a.tarih<b.tarih?-1:a.tarih>b.tarih?1:(a.t||0)-(b.t||0)));
+  const list=[...d.islemler].sort(siraKarsilastir);
   const sig=new Map();
   for(const x of list){ if(x.tur==="Temettü") continue; const k=[x.kod,x.tarih,x.tur,x.lot,x.fiyat].join("|"); sig.set(k,(sig.get(k)||0)+1); }
   const P=kod=>out.poz[kod] ||= {kod,tip:hs.get(kod)?.tip||"Hisse",sinif:hs.get(kod)?.vergiSinifi||"diger",ad:hs.get(kod)?.ad||"",lot:0,maliyet:0,gerceklesen:0,temettu:0,komisyon:0,alinan:0,satilan:0,fifo:[],bozuk:false,mukerrer:false,islemSay:0,satislar:[]};
@@ -307,24 +317,25 @@ function hesapla(d){
     const lot=+x.lot||0, fiy=+x.fiyat||0, kom=+x.komisyon||0;
     p.komisyon+=kom;
     let note=null;
-    const yil=String(x.tarih).slice(0,4);
+    const yil=x.tarih?String(x.tarih).slice(0,4):TARIHSIZ;
+    if(x.tur==="Alış"&&!(fiy>0)){ note={lvl:"warn",msg:"Alış fiyatı girilmemiş; bu alım maliyetsiz sayılıyor ve kâr/zararı olduğundan yüksek gösterir. Fiyatı gir ya da bedelsizse türünü Bedelsiz yap."}; p.fiyatsizAlis=true; }
     if(x.tur==="Alış"){ p.lot+=lot; p.maliyet+=lot*fiy; p.alinan+=lot; if(lot>0) p.fifo.push({tarih:x.tarih,lot,birim:fiy}); }
     else if(x.tur==="Bedelsiz"){ p.lot+=lot; p.alinan+=lot; if(lot>0) p.fifo.push({tarih:x.tarih,lot,birim:0}); }
     else if(x.tur==="Satış"){
       p.satilan+=lot;
-      if(lot>p.lot+1e-9){ note={lvl:"bad",msg:"Satılan lot ("+LOT(lot)+") o tarihte eldeki lottan ("+LOT(p.lot)+") fazla. Önceki bir alım eksik olabilir."}; p.bozuk=true; p.maliyet=0; p.lot-=lot; p.fifo=[]; }
+      if(lot>p.lot+1e-9){ note={lvl:"bad",msg:x.tarih?"Satılan lot ("+LOT(lot)+") o tarihte eldeki lottan ("+LOT(p.lot)+") fazla. Önceki bir alım eksik olabilir.":"Tarihsiz satış en son işlem sayılır; satılan lot ("+LOT(lot)+") yine de eldeki lottan ("+LOT(p.lot)+") fazla. Bir alım eksik olabilir."}; p.bozuk=true; p.maliyet=0; p.lot-=lot; p.fifo=[]; }
       else {
         const ort=p.lot>0?p.maliyet/p.lot:0; const r=lot*(fiy-ort);
         p.gerceklesen+=r; p.maliyet-=lot*ort; p.lot-=lot; if(p.lot<1e-9){ p.lot=0; p.maliyet=0; }
         p.satislar.push({tarih:x.tarih,lot,fiyat:fiy,ort,kazanc:r});
         // fund withholding is computed first-in-first-out by purchase date, as intermediaries do
-        let kalan=lot, stopaj=0;
-        while(kalan>1e-9 && p.fifo.length){ const c=p.fifo[0]; const m=Math.min(kalan,c.lot); if(p.tip==="Fon") stopaj+=m*(fiy-c.birim)*fonOran(p.sinif,c.tarih,x.tarih); c.lot-=m; kalan-=m; if(c.lot<=1e-9) p.fifo.shift(); }
-        out.olaylar.push({yil,tarih:x.tarih,kod:x.kod,tip:p.tip,tur:"satis",kazanc:r,stopaj:p.tip==="Fon"?Math.max(0,stopaj):0});
+        let kalan=lot, stopaj=0, tahmini=!x.tarih;
+        while(kalan>1e-9 && p.fifo.length){ const c=p.fifo[0]; const m=Math.min(kalan,c.lot); if(p.tip==="Fon"){ stopaj+=m*(fiy-c.birim)*fonOran(p.sinif,c.tarih,x.tarih); if(!c.tarih) tahmini=true; } c.lot-=m; kalan-=m; if(c.lot<=1e-9) p.fifo.shift(); }
+        out.olaylar.push({yil,tarih:x.tarih,kod:x.kod,tip:p.tip,tur:"satis",kazanc:r,stopaj:p.tip==="Fon"?Math.max(0,stopaj):0,tahmini:p.tip==="Fon"&&tahmini});
       }
     }
     else if(x.tur==="Temettü"){ const net=+x.tutar||0, o=temettuOran(x.tarih), brut=net/(1-o); p.temettu+=net; out.olaylar.push({yil,tarih:x.tarih,kod:x.kod,tip:p.tip,tur:"temettu",net,brut,stopaj:brut-net,oran:o}); }
-    if(!note && x.tur!=="Temettü"){ const k=[x.kod,x.tarih,x.tur,x.lot,x.fiyat].join("|"); if(sig.get(k)>1){ note={lvl:"warn",msg:"Aynı gün, aynı lot ve fiyatla ikinci kayıt. Mükerrer olabilir."}; p.mukerrer=true; } }
+    if(!note && x.tur!=="Temettü"){ const k=[x.kod,x.tarih,x.tur,x.lot,x.fiyat].join("|"); if(sig.get(k)>1){ note={lvl:"warn",msg:x.tarih?"Aynı gün, aynı lot ve fiyatla ikinci kayıt. Mükerrer olabilir.":"Tarihsiz, aynı lot ve fiyatla ikinci kayıt. Mükerrer olabilir."}; p.mukerrer=true; } }
     if(note) out.satir[x.id]=note;
   }
   let T={deger:0,maliyet:0,kz:0,gerceklesen:0,temettu:0,komisyon:0,gunluk:0,gunlukBaz:0,fiyatsiz:0,tutarsiz:0,acik:0};
@@ -343,7 +354,7 @@ function hesapla(d){
         if(f.onceki){ p.gunluk=p.lot*(f.fiyat-f.onceki); p.gunlukYuzde=f.fiyat/f.onceki-1; T.gunluk+=p.gunluk; T.gunlukBaz+=p.lot*f.onceki; }
       } else { p.deger=p.kz=p.kzYuzde=null; T.fiyatsiz++; }
       if(f){ p.perf={hafta:getiri(p.kod,f.fiyat,7),ay:getiri(p.kod,f.fiyat,30),yil:getiri(p.kod,f.fiyat,0,true)}; }
-      if(p.tip==="Fon" && f){ let s=0; const bugun=today(); for(const c of p.fifo) s+=c.lot*(f.fiyat-c.birim)*fonOran(p.sinif,c.tarih,bugun); p.acikStopaj=Math.max(0,s); T.acikStopaj=(T.acikStopaj||0)+p.acikStopaj; }
+      if(p.tip==="Fon" && f){ let s=0; const bugun=today(); for(const c of p.fifo){ s+=c.lot*(f.fiyat-c.birim)*fonOran(p.sinif,c.tarih,bugun); if(!c.tarih) p.acikStopajTahmini=true; } p.acikStopaj=Math.max(0,s); T.acikStopaj=(T.acikStopaj||0)+p.acikStopaj; }
       const h=hs.get(p.kod);
       if(h && f){ if(h.hedef && f.fiyat>=h.hedef) p.alarm={t:"hedef",msg:"Hedef fiyata ("+PX(h.hedef)+") ulaştı"}; else if(h.stop && f.fiyat<=h.stop) p.alarm={t:"stop",msg:"Zarar-durdur seviyesinin ("+PX(h.stop)+") altında"}; }
     }
@@ -356,16 +367,21 @@ function hesapla(d){
   for(const p of Object.values(out.poz)){
     if(p.bozuk) out.uyarilar.push({lvl:"bad",kod:p.kod,msg:"Satışlar alımlardan fazla. Maliyet ve kâr/zarar hesaplanamıyor, toplamlara katılmadı. İşlemler sekmesinde kırmızı satırları kontrol edin."});
     else if(p.mukerrer) out.uyarilar.push({lvl:"warn",kod:p.kod,msg:"Olası mükerrer kayıt var. İşlemler sekmesinde sarı satırlara bakın."});
+    if(!p.bozuk && p.fiyatsizAlis) out.uyarilar.push({lvl:"warn",kod:p.kod,msg:"Fiyatı girilmemiş bir alış var; maliyet eksik olduğu için kâr/zarar yüksek görünür. İşlemler sekmesinde sarı satıra bak."});
     if(!p.bozuk && p.lot>0 && p.f && !p.f.elle){
       if(p.f.eski) out.uyarilar.push({lvl:"warn",kod:p.kod,msg:"Fiyat "+fmtDate(String(p.f.tarih).slice(0,10))+" tarihli, güncellenemedi. Hesaplar bu fiyatla yapılıyor; istersen detaydan elle gir."});
       if(p.f.dogrulama==="uyusmazlik"||p.f.dogrulama==="supheli") out.uyarilar.push({lvl:"warn",kod:p.kod,msg:(p.f.dogrulama==="supheli"?"Fiyatta olağan dışı bir hareket var":"Fiyat kaynakları birbirini tutmuyor")+(p.f.not?" ("+p.f.not+")":"")+". Aracı kurum uygulamandan kontrol et."});
     }
-    if(!p.bozuk && p.lot>0 && !p.f) out.uyarilar.push({lvl:"warn",kod:p.kod,msg:"Güncel fiyat yok. Fiyatları güncelleyin ya da hisse detayından elle girin."});
+    if(!p.bozuk && !p.f && (p.lot>0 || kodHatasi(p.kod)?.bulunamadi)){ const h=kodHatasi(p.kod);
+      out.uyarilar.push(h&&h.bulunamadi?{lvl:"bad",kod:p.kod,msg:"Bu kod hiçbir fiyat kaynağında bulunamadı; yanlış yazılmış olabilir. Doğru kodu (örneğin Eczacıbaşı İlaç için ECILC) TradingView ya da aracı kurum uygulamandan kontrol et, bu kodu hisse detayından silip doğrusunu ekle."}
+        :{lvl:"warn",kod:p.kod,msg:h?"Fiyat alınamadı ("+h.tarih+"). Kaynaklar bağlantı hatası verdi; internet bağlantını kontrol edip fiyatları yeniden güncelle.":"Güncel fiyat yok. Fiyatları güncelleyin ya da hisse detayından elle girin."}); }
     if(p.alarm) out.uyarilar.push({lvl:p.alarm.t==="stop"?"bad":"ok",kod:p.kod,msg:p.alarm.msg+"."});
   }
   out.temettuOneri=temettuBul(d,list);
   return out;
 }
+// The price module's last attempt for a code that has no price: {mesaj, bulunamadi, tarih} or null.
+function kodHatasi(kod){ return (S.durum&&S.durum.kodHata&&S.durum.kodHata[kod])||null; }
 // Dividends the price module found (per-share amounts, adjusted back for later bonus issues) on dates the ledger held lots,
 // which are not in the ledger yet. Shown for confirmation; nothing is added on its own.
 function temettuBul(d,list){
@@ -376,7 +392,8 @@ function temettuBul(d,list){
     const isl=list.filter(x=>x.kod===kod); if(!isl.length) continue;
     for(const [tarih,hisseBasi] of ev.temettu){
       if(yoksay.has(kod+"|"+tarih)) continue;
-      let lot=0; for(const x of isl){ if(x.tarih>=tarih) break; if(x.tur==="Alış"||x.tur==="Bedelsiz") lot+=+x.lot||0; else if(x.tur==="Satış") lot-=+x.lot||0; }
+      // an undated record only counts from the day it was entered into the ledger: we do not know it was held earlier
+      let lot=0; for(const x of isl){ if((x.tarih||x.girildi||"9999-12-31")>=tarih) continue; if(x.tur==="Alış"||x.tur==="Bedelsiz") lot+=+x.lot||0; else if(x.tur==="Satış") lot-=+x.lot||0; }
       if(!(lot>0)) continue;
       const kayitli=isl.some(x=>x.tur==="Temettü"&&gunFark(tarih,x.tarih)>=-7&&gunFark(tarih,x.tarih)<=60);
       if(kayitli) continue;
@@ -432,10 +449,11 @@ const TABS=[["ozet","Özet"],["poz","Pozisyonlar"],["islem","İşlemler"],["verg
 const EK_GORUNUM={};
 function render(){ if(!S.calc) S.calc=hesapla(S.defter); renderChips(); renderBanner(); renderTabs(); renderMain(); renderDrawer(); }
 // Prices can arrive at any moment (background refresh). Never redraw a form the viewer is filling in: those parts wait for the next redraw.
-function duzenleniyor(kok){ const k=$(kok); if(!k) return false; const a=document.activeElement;
-  if(a&&k.contains(a)&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)&&a.closest("form")) return true;
+function duzenleniyor(kok){ const k=$(kok); if(!k) return false;
+  // only fields whose value differs from what was drawn count: redrawing an untouched (even focused) field loses nothing
   return [...k.querySelectorAll("form input,form textarea")].some(i=>!/checkbox|radio|hidden|file/.test(i.type)&&i.value!==i.defaultValue)
-    ||[...k.querySelectorAll("form select")].some(x=>[...x.options].some(o=>o.selected!==o.defaultSelected)); }
+    // a select with no "selected" attribute starts on its first option
+    ||[...k.querySelectorAll("form select")].some(x=>{ const d=[...x.options].findIndex(o=>o.defaultSelected); return !x.multiple&&x.options.length&&x.selectedIndex!==(d<0?0:d); }); }
 function arkaPlanRender(){ if(!S.calc) S.calc=hesapla(S.defter); renderChips(); renderBanner(); renderTabs(); if(!duzenleniyor("#main")) renderMain(); if(!duzenleniyor("#overlay")) renderDrawer(); }
 function renderChips(){
   const f=S.piyasa?.guncelleme; const parts=[];
@@ -503,7 +521,7 @@ function vPoz(){
     const state = p.bozuk?`<span class="pill bad">Kayıt eksik</span>`: p.lot<=0?`<span class="pill neutral">${p.islemSay?"Kapalı":"İzleme"}</span>`: p.alarm?`<span class="pill ${p.alarm.t==="stop"?"bad":"ok"}">${p.alarm.t==="stop"?"Stop altı":"Hedefte"}</span>`: p.mukerrer?`<span class="pill warn">Kontrol et</span>`:`<span class="pill ok">Açık</span>`;
     return `<tr class="${p.bozuk?"flag":""}"><td><button class="linkbtn" data-detay="${esc(p.kod)}">${esc(p.kod)}</button><div class="src">${esc(p.tip)}${p.ad?" · "+esc(p.ad):""}</div></td>
     <td>${state}</td><td class="n num">${p.bozuk?"—":LOT(p.lot)}</td><td class="n num">${p.bozuk?"n/a":PX(p.ort)}</td>
-    <td class="n num">${p.f?PX(p.f.fiyat):"—"}${p.f?`<div class="src">${p.f.elle?"elle":fmtDate(String(p.f.tarih).slice(0,10))}${!p.f.elle&&(p.f.eski||p.f.dogrulama==="uyusmazlik"||p.f.dogrulama==="supheli"||(p.tip!=="Fon"&&p.f.dogrulama==="tek-kaynak"))?" · kontrol":""}</div>`:""}</td>
+    <td class="n num">${p.f?PX(p.f.fiyat):kodHatasi(p.kod)?.bulunamadi?`<span class="down small">kod bulunamadı</span>`:"—"}${p.f?`<div class="src">${p.f.elle?"elle":fmtDate(String(p.f.tarih).slice(0,10))}${!p.f.elle&&(p.f.eski||p.f.dogrulama==="uyusmazlik"||p.f.dogrulama==="supheli"||(p.tip!=="Fon"&&p.f.dogrulama==="tek-kaynak"))?" · kontrol":""}</div>`:""}</td>
     <td class="n num">${p.bozuk?"n/a":TL(p.deger)}</td><td class="n num ${cls(p.kz)}">${p.bozuk?"n/a":TLs(p.kz)}</td><td class="n num ${cls(p.kzYuzde)}">${p.bozuk?"n/a":PCT(p.kzYuzde)}</td><td class="n num ${cls(p.perf?.hafta)}">${PCT(p.perf?.hafta)}</td><td class="n num ${cls(p.perf?.ay)}">${PCT(p.perf?.ay)}</td><td class="n num ${cls(p.perf?.yil)}">${PCT(p.perf?.yil)}</td>
     <td class="n num ${cls(p.gerceklesen)}">${p.bozuk?"n/a":TLs(p.gerceklesen)}</td><td class="n num">${p.temettu?TL(p.temettu):"—"}</td>
     <td class="n num">${h.hedef?PX(h.hedef):"—"} / ${h.stop?PX(h.stop):"—"}</td></tr>`;}).join("");
@@ -516,7 +534,7 @@ function vPoz(){
   ${kapali.length?`<section class="panel"><div class="panel-h"><h2>Satıp kapattıklarım <span class="muted num" style="font-size:15px">${kapali.length}</span></h2><span class="small muted">Tamamını sattığın hisseler; gerçekleşen kâr/zarar burada kalır</span></div>
   <div class="tbl-wrap"><table><thead><tr><th>Kod</th><th>Durum</th><th class="n">Lot</th><th class="n">Ort. alış fiyatı</th><th class="n">Fiyat</th><th class="n">Değer</th><th class="n">K/Z</th><th class="n">K/Z %</th><th class="n">Hafta</th><th class="n">Ay</th><th class="n">Yıl içi</th><th class="n">Gerçekleşen</th><th class="n">Temettü</th><th class="n">Hedef / Stop</th></tr></thead><tbody>${satir(kapali)}</tbody></table></div></section>`:""}
   <section class="panel"><div class="panel-h"><h2>İzleme listesi <span class="muted num" style="font-size:15px">${izleme.length}</span></h2><span class="row"><span class="small muted">Takip ettiğin ama işlem kaydı olmayan kodlar. Portföy değerine katılmaz.</span><button class="btn" data-act="izleme-ekle">+ Kod ekle</button></span></div>
-  ${izleme.length?`<div class="tbl-wrap"><table><thead><tr><th>Kod</th><th class="n">Fiyat</th><th class="n">Günlük</th><th class="n">Hafta</th><th class="n">Ay</th><th class="n">Yıl içi</th><th class="n">Hedef / Stop</th><th></th></tr></thead><tbody>${izleme.map(p=>{const h=S.defter.hisseler.find(x=>x.kod===p.kod)||{}; const g=p.f&&p.f.onceki?p.f.fiyat/p.f.onceki-1:null; return `<tr><td><button class="linkbtn" data-detay="${esc(p.kod)}">${esc(p.kod)}</button><div class="src">${esc(p.tip)}${p.ad?" · "+esc(p.ad):""}</div></td><td class="n num">${p.f?PX(p.f.fiyat):`<span class="muted">fiyat yok</span>`}</td><td class="n num ${cls(g)}">${PCT(g)}</td><td class="n num ${cls(p.perf?.hafta)}">${PCT(p.perf?.hafta)}</td><td class="n num ${cls(p.perf?.ay)}">${PCT(p.perf?.ay)}</td><td class="n num ${cls(p.perf?.yil)}">${PCT(p.perf?.yil)}</td><td class="n num">${h.hedef?PX(h.hedef):"—"} / ${h.stop?PX(h.stop):"—"}</td><td class="n"><button class="btn ghost" data-alis="${esc(p.kod)}">Alış gir</button></td></tr>`;}).join("")}</tbody></table></div>`:`<p class="small muted">İzleme listen boş.</p>`}</section>
+  ${izleme.length?`<div class="tbl-wrap"><table><thead><tr><th>Kod</th><th class="n">Fiyat</th><th class="n">Günlük</th><th class="n">Hafta</th><th class="n">Ay</th><th class="n">Yıl içi</th><th class="n">Hedef / Stop</th><th></th></tr></thead><tbody>${izleme.map(p=>{const h=S.defter.hisseler.find(x=>x.kod===p.kod)||{}; const g=p.f&&p.f.onceki?p.f.fiyat/p.f.onceki-1:null; return `<tr><td><button class="linkbtn" data-detay="${esc(p.kod)}">${esc(p.kod)}</button><div class="src">${esc(p.tip)}${p.ad?" · "+esc(p.ad):""}</div></td><td class="n num">${p.f?PX(p.f.fiyat):kodHatasi(p.kod)?.bulunamadi?`<span class="down small">kod bulunamadı</span>`:`<span class="muted">fiyat yok</span>`}</td><td class="n num ${cls(g)}">${PCT(g)}</td><td class="n num ${cls(p.perf?.hafta)}">${PCT(p.perf?.hafta)}</td><td class="n num ${cls(p.perf?.ay)}">${PCT(p.perf?.ay)}</td><td class="n num ${cls(p.perf?.yil)}">${PCT(p.perf?.yil)}</td><td class="n num">${h.hedef?PX(h.hedef):"—"} / ${h.stop?PX(h.stop):"—"}</td><td class="n"><button class="btn ghost" data-alis="${esc(p.kod)}">Alış gir</button></td></tr>`;}).join("")}</tbody></table></div>`:`<p class="small muted">İzleme listen boş.</p>`}</section>
   <section class="panel"><div class="panel-h"><h2>Hisse ve fon ekle</h2><span class="small muted">Takip etmek istediğin kodu ekle; aldıysan sonra alışını gir</span></div>
   <form class="form" id="f-hisse" autocomplete="off">
     <div class="field"><label for="h-kod">Kod</label><input id="h-kod" placeholder="THYAO" maxlength="8" required></div>
@@ -548,10 +566,10 @@ function vIslem(){
   const kodlar=S.defter.hisseler.map(h=>h.kod);
   const f=e||{kod:(S.ekleKod&&kodlar.includes(S.ekleKod)?S.ekleKod:kodlar[0])||"",tarih:today(),tur:"Alış",lot:"",fiyat:"",komisyon:"",kurum:S.defter.kurumlar[0]?.ad||"",grup:"",not:"",tutar:""};
   const q=S.filtre.trim().toUpperCase();
-  const list=[...S.defter.islemler].sort((a,b)=>(a.tarih<b.tarih?1:a.tarih>b.tarih?-1:(b.t||0)-(a.t||0))).filter(x=>!q||(q[0]==="#"&&String(x.no)===q.slice(1))||x.kod.includes(q)||(x.grup||"").toUpperCase().includes(q)||(x.kurum||"").toUpperCase().includes(q));
+  const list=[...S.defter.islemler].sort((a,b)=>siraKarsilastir(b,a)).filter(x=>!q||(q[0]==="#"&&String(x.no)===q.slice(1))||x.kod.includes(q)||(x.grup||"").toUpperCase().includes(q)||(x.kurum||"").toUpperCase().includes(q));
   const pc={"Alış":"buy","Satış":"sell","Bedelsiz":"bonus","Temettü":"div"};
   const rows=list.map(x=>{const n=S.calc.satir[x.id]; const tut=x.tur==="Temettü"?+x.tutar:(+x.lot)*(+x.fiyat);
-    return `<tr class="${n?(n.lvl==="bad"?"flag":"dup"):""}"><td class="n num muted">${x.no??"—"}</td><td class="num">${fmtDate(x.tarih)}</td><td><button class="linkbtn" data-detay="${esc(x.kod)}">${esc(x.kod)}</button></td><td><span class="pill ${pc[x.tur]}">${esc(x.tur)}</span></td>
+    return `<tr class="${n?(n.lvl==="bad"?"flag":"dup"):""}"><td class="n num muted">${x.no??"—"}</td><td class="num">${x.tarih?fmtDate(x.tarih):`<span class="muted" title="Tarih girilmemiş">tarih yok</span>`}</td><td><button class="linkbtn" data-detay="${esc(x.kod)}">${esc(x.kod)}</button></td><td><span class="pill ${pc[x.tur]}">${esc(x.tur)}</span></td>
     <td class="n num in">${x.tur==="Temettü"?"—":LOT(x.lot)}</td><td class="n num in">${x.tur==="Temettü"||x.tur==="Bedelsiz"?"—":PX(x.fiyat)}</td><td class="n num">${TL(tut)}</td><td class="n num in">${x.komisyon?nf2.format(x.komisyon):"—"}</td>
     <td>${esc(x.kurum||"—")}</td><td>${esc(x.grup||"—")}</td><td style="white-space:normal;min-width:200px">${n?`<span class="small ${n.lvl==="bad"?"down":""}">${esc(n.msg)}</span>`:`<span class="small muted">${esc(x.not||"")}</span>`}</td>
     <td class="n"><button class="btn ghost" data-duzenle="${x.id}">Düzenle</button><button class="btn ghost" data-sil="${x.id}" style="color:var(--loss)">Sil</button></td></tr>`;}).join("");
@@ -559,7 +577,7 @@ function vIslem(){
   return `<section class="panel"><div class="panel-h"><h2>${e?"İşlemi düzenle":"İşlem ekle"}</h2><span class="small muted">Mavi alanlar senin girdiğin değerler; komisyon aracı kuruma göre otomatik dolar, istersen değiştirebilirsin</span></div>
   ${kodlar.length?`<form class="form" id="f-islem" autocomplete="off">
     <div class="field"><label for="i-kod">Hisse / fon</label><select id="i-kod">${kodOpts}</select></div>
-    <div class="field"><label for="i-tarih">Tarih</label><input id="i-tarih" type="date" value="${esc(f.tarih)}" required></div>
+    <div class="field"><label for="i-tarih">Tarih</label><input id="i-tarih" type="date" value="${esc(f.tarih||"")}"><span class="hint">Hatırlamıyorsan boş bırakabilirsin</span></div>
     <div class="field"><label for="i-tur">İşlem</label><select id="i-tur">${TYPES.map(t=>`<option ${t===f.tur?"selected":""}>${t}</option>`).join("")}</select></div>
     <div class="field" data-for="lot"><label for="i-lot">Lot</label><input id="i-lot" inputmode="decimal" value="${e&&f.tur!=="Temettü"?esc(f.lot):""}" placeholder="1000"></div>
     <div class="field" data-for="fiyat"><label for="i-fiyat">Fiyat (TL)</label><input id="i-fiyat" inputmode="decimal" value="${e&&f.tur!=="Temettü"&&f.tur!=="Bedelsiz"?esc(String(f.fiyat).replace(".",",")):""}" placeholder="12,50"></div>
@@ -604,17 +622,19 @@ function vRapor(){
 // depends on all their income (salary, rent …), which this app does not know, so it never computes a tax bill or
 // says whether a return is due.
 function vVergi(){
-  const bozukKod=new Set(Object.values(S.calc.poz).filter(p=>p.bozuk).map(p=>p.kod)); const O=S.calc.olaylar.filter(o=>!bozukKod.has(o.kod)); const yillar=[...new Set([String(new Date().getFullYear()),...O.map(o=>o.yil)])].sort().reverse();
-  S.vYil ||= yillar[0]; const Y=S.vYil; const E=O.filter(o=>o.yil===Y);
+  const bozukKod=new Set(Object.values(S.calc.poz).filter(p=>p.bozuk).map(p=>p.kod)); const O=S.calc.olaylar.filter(o=>!bozukKod.has(o.kod)); const yillar=[...new Set([String(new Date().getFullYear()),...O.map(o=>o.yil)])].filter(y=>y!==TARIHSIZ).sort().reverse(); if(O.some(o=>o.yil===TARIHSIZ)) yillar.push(TARIHSIZ);
+  if(!yillar.includes(S.vYil)) S.vYil=yillar[0]; const Y=S.vYil; const E=O.filter(o=>o.yil===Y); const YA=Y===TARIHSIZ?"Tarihsiz işlemlerde":Y+" yılında";
   const sum=(arr,f)=>arr.reduce((a,o)=>a+(+o[f]||0),0);
   const hs=E.filter(o=>o.tur==="satis"&&o.tip==="Hisse"), fs=E.filter(o=>o.tur==="satis"&&o.tip==="Fon"), ts=E.filter(o=>o.tur==="temettu");
   const hK=sum(hs,"kazanc"), fK=sum(fs,"kazanc"), fS=sum(fs,"stopaj");
   const tB=sum(ts,"brut"), tS=sum(ts,"stopaj"), tN=sum(ts,"net");
   const sinir=+(S.defter.ayarlar?.beyanSiniri)||BEYAN_SINIRI_2026;
-  const kom=S.defter.islemler.filter(x=>String(x.tarih).startsWith(Y)).reduce((a,x)=>a+(+x.komisyon||0),0);
+  const kom=S.defter.islemler.filter(x=>Y===TARIHSIZ?!x.tarih:String(x.tarih).startsWith(Y)).reduce((a,x)=>a+(+x.komisyon||0),0);
+  const tarihsizSay=O.filter(o=>o.yil===TARIHSIZ).length;
   const T=S.calc.toplam;
   const acikFon=Object.values(S.calc.poz).filter(p=>p.tip==="Fon"&&p.lot>0&&!p.bozuk);
   return `<div class="row" style="justify-content:space-between"><div class="field" style="max-width:180px"><label for="v-yil">Yıl</label><select id="v-yil">${yillar.map(y=>`<option ${y===Y?"selected":""}>${y}</option>`).join("")}</select></div><span class="small muted">Oranlar 28.09.2026 itibarıyla geçerli mevzuata göre · tam mükellef gerçek kişi</span></div>
+  ${Y===TARIHSIZ?`<div class="banner warn"><p><b>Bu satış ve temettülerin tarihi girilmemiş,</b> bu yüzden hangi vergi yılına ait oldukları bilinmiyor. Vergi yılına göre görmek istersen İşlemler sekmesinden tarihlerini gir.</p></div>`:tarihsizSay?`<p class="small muted">Tarihi girilmemiş ${tarihsizSay} satış/temettü hiçbir yıla yazılmadı; Yıl listesinde "Tarihsiz" olarak ayrı görünür.</p>`:""}
   <div class="banner"><p><b>Ödeyeceğin vergi burada hesaplanmaz.</b> Gelir vergisi; maaş, kira gibi tüm yıllık gelirlerine göre hesaplanır ve bu uygulama onları bilmez. Burada yalnızca bu defterdeki işlemlerden doğan tutarlar ve ödeme sırasında zaten kesilen vergiler (stopaj) var. Beyanname verirken ya da mali müşavirinle konuşurken kullanabilirsin.</p></div>
   <section class="kpis">
     ${kpi("Hisse alım-satım kazancı",`<span class="${cls(hK)}">${TLs(hK)}</span>`,"BIST hisseleri · stopaj %0, beyan edilmez")}
@@ -624,14 +644,15 @@ function vVergi(){
   </section>
   <div class="grid2">
   <section class="panel"><div class="panel-h"><h2>Temettüler</h2><span class="small muted">${Y}</span></div>
-    ${ts.length?`<div class="tbl-wrap"><table><thead><tr><th>Tarih</th><th>Kod</th><th class="n">Brüt</th><th class="n">Kesilen stopaj</th><th class="n">Hesaba geçen</th></tr></thead><tbody>${ts.map(o=>`<tr><td class="num">${fmtDate(o.tarih)}</td><td>${esc(o.kod)}</td><td class="n num">${TL(o.brut)}</td><td class="n num">${TL(o.stopaj)} <span class="src">%${nf0.format(o.oran*100)}</span></td><td class="n num">${TL(o.net)}</td></tr>`).join("")}</tbody><tfoot><tr><td colspan="2">Toplam</td><td class="n num">${TL(tB)}</td><td class="n num">${TL(tS)}</td><td class="n num">${TL(tN)}</td></tr></tfoot></table></div>`:`<p class="small muted">${Y} yılında kayıtlı temettü yok.</p>`}
+    ${ts.length?`<div class="tbl-wrap"><table><thead><tr><th>Tarih</th><th>Kod</th><th class="n">Brüt</th><th class="n">Kesilen stopaj</th><th class="n">Hesaba geçen</th></tr></thead><tbody>${ts.map(o=>`<tr><td class="num">${fmtDate(o.tarih)}</td><td>${esc(o.kod)}</td><td class="n num">${TL(o.brut)}</td><td class="n num">${TL(o.stopaj)} <span class="src">%${nf0.format(o.oran*100)}</span></td><td class="n num">${TL(o.net)}</td></tr>`).join("")}</tbody><tfoot><tr><td colspan="2">Toplam</td><td class="n num">${TL(tB)}</td><td class="n num">${TL(tS)}</td><td class="n num">${TL(tN)}</td></tr></tfoot></table></div>`:`<p class="small muted">${YA} kayıtlı temettü yok.</p>`}
     <details class="small"><summary>Temettü nasıl vergilendirilir?</summary><div class="prose small" style="margin-top:8px">
-      <p>Şirket temettüyü öderken <b>%15 stopaj</b> keser (22.12.2024 öncesi ödemelerde %10); hesabına net tutar geçer. Brüt tutar bu nettan geri hesaplanır.</p>
-      <p>Brüt temettünün yarısı gelir vergisinden istisnadır. Bu yıl için bu defterdeki brüt temettülerin yarısı <b class="num">${TL(tB/2)}</b>. Beyanname verilip verilmeyeceği ve ödenecek vergi; bu tutarın yıllık sınırla (${Y} için girilen sınır ${TL(sinir)}) karşılaştırılmasına ve diğer gelirlerine bağlıdır. Beyan edilirse kesilen stopaj hesaplanan vergiden düşülür.</p>
+      <p>Şirket temettüyü öderken <b>%15 stopaj</b> keser (22.12.2024 öncesi ödemelerde %10); hesabına net tutar geçer. Brüt tutar bu nettan geri hesaplanır. Tarihi girilmemiş temettülerde güncel oran (%15) kullanılır.</p>
+      <p>Brüt temettünün yarısı gelir vergisinden istisnadır. ${Y===TARIHSIZ?"Bu tarihsiz kayıtlarda":"Bu yıl için bu defterdeki"} brüt temettülerin yarısı <b class="num">${TL(tB/2)}</b>. Beyanname verilip verilmeyeceği ve ödenecek vergi; bu tutarın yıllık sınırla (${Y} için girilen sınır ${TL(sinir)}) karşılaştırılmasına ve diğer gelirlerine bağlıdır. Beyan edilirse kesilen stopaj hesaplanan vergiden düşülür.</p>
     </div></details>
   </section>
   <section class="panel"><div class="panel-h"><h2>Fon satışları</h2><span class="small muted">${Y}</span></div>
-    ${fs.length?`<div class="tbl-wrap"><table><thead><tr><th>Tarih</th><th>Fon</th><th class="n">Kazanç</th><th class="n">Tahmini stopaj</th></tr></thead><tbody>${fs.map(o=>`<tr><td class="num">${fmtDate(o.tarih)}</td><td>${esc(o.kod)}</td><td class="n num ${cls(o.kazanc)}">${TLs(o.kazanc)}</td><td class="n num">${TL(o.stopaj)}</td></tr>`).join("")}</tbody></table></div>`:`<p class="small muted">${Y} yılında fon satışı yok.</p>`}
+    ${fs.length?`<div class="tbl-wrap"><table><thead><tr><th>Tarih</th><th>Fon</th><th class="n">Kazanç</th><th class="n">Tahmini stopaj</th></tr></thead><tbody>${fs.map(o=>`<tr><td class="num">${fmtDate(o.tarih)}</td><td>${esc(o.kod)}</td><td class="n num ${cls(o.kazanc)}">${TLs(o.kazanc)}</td><td class="n num">${TL(o.stopaj)}</td></tr>`).join("")}</tbody></table></div>`:`<p class="small muted">${YA} fon satışı yok.</p>`}
+    ${fs.some(o=>o.tahmini)||acikFon.some(p=>p.acikStopajTahmini)?`<p class="small muted">Alış tarihi girilmemiş fon paylarında stopaj oranı bilinemez; satış günündeki genel orana göre tahmin edildi (kısa süre tutulmuş sayıldı). Gerçek tutar aracı kurumunun kestiğidir.</p>`:""}
     ${acikFon.length?`<p class="small">Elindeki fonları bugün satsaydın kurumun keseceği tahmini stopaj: <b class="num">${TL(T.acikStopaj||0)}</b></p>`:""}
     <details class="small"><summary>Hisse ve fon kazançları nasıl vergilendirilir?</summary><div class="prose small" style="margin-top:8px">
       <p><b>BIST hisseleri:</b> Borsa İstanbul'da işlem gören hisselerin alım-satım kazancına gerçek kişiler için <b>%0 stopaj</b> uygulanır ve bu kazanç beyan edilmez.</p>
@@ -669,7 +690,8 @@ function vAyar(){
   </form></section>
   <section class="panel"><div class="panel-h"><h2>Verilerini taşı</h2></div>
   <div class="prose"><p><b>Excel olarak indir:</b> Özet, pozisyonlar, işlemler ve yıllık vergi özetini ayrı sayfalar halinde tek bir .xlsx dosyasına koyar. Tutarlar Excel'in muhasebe biçimindedir.</p>
-  <p><b>Excel'den yükle:</b> Bu sayfadan indirdiğin Excel dosyasını ya da eski Excel takip programının dosyasını (.xlsx, .xlsm) doğrudan yükleyebilirsin. Yüklemeden önce dosyada ne bulunduğunu gösterir; mevcut defterine eklemeyi ya da defterini dosyadakilerle değiştirmeyi sen seçersin. Dosya bu cihazda okunur, bir yere gönderilmez. Programın DATA sayfasındaki işlemler ve aracı kurum komisyon tabloları da alınır. DATA sayfasında ISLEM_NO, HISSE, TARIH, ALINAN_LOT, SATILAN_LOT, ALIS_FIYATI, SATIS_FIYATI, KOMISYON, TEMETTU, ISLEM_GRUBU ve ARACI_KURUM sütunları tanınır. CSV de olur.</p></div>
+  <p><b>Excel'den yükle:</b> Bu sayfadan indirdiğin Excel dosyasını ya da eski Excel takip programının dosyasını (.xlsx, .xlsm) doğrudan yükleyebilirsin. Yüklemeden önce dosyada ne bulunduğunu gösterir; mevcut defterine eklemeyi ya da defterini dosyadakilerle değiştirmeyi sen seçersin. Dosya bu cihazda okunur, bir yere gönderilmez. Programın DATA sayfasındaki işlemler ve aracı kurum komisyon tabloları da alınır. DATA sayfasında ISLEM_NO, HISSE, TARIH, ALINAN_LOT, SATILAN_LOT, ALIS_FIYATI, SATIS_FIYATI, KOMISYON, TEMETTU, ISLEM_GRUBU ve ARACI_KURUM sütunları tanınır. CSV de olur.</p>
+  <p><b>Kendi tablon:</b> En az Hisse (ya da Kod) ve Lot (ya da Adet) sütunu yeter; Fiyat (ya da Alış fiyatı / Maliyet), İşlem türü, Tarih ve Komisyon varsa onlar da okunur. <b>Tarih zorunlu değil:</b> alış tarihini hatırlamıyorsan boş bırak. Kâr/zarar ortalama alış fiyatına göre hesaplandığı için tarihten etkilenmez.</p></div>
   <div class="row"><button class="btn primary" data-act="xlsx-disa">Excel olarak indir</button><label class="btn" for="xl-in">Excel'den yükle</label><span class="small" id="csv-msg"></span></div></section>
   <section class="panel"><div class="panel-h"><h2>Gizlilik ve güvenlik</h2></div>
   <div class="prose"><ul>
@@ -703,6 +725,7 @@ function renderDrawer(){
   const f=p.f; const tv=h.tip==="Fon"?`https://www.tefas.gov.tr/FonAnaliz.aspx?FonKod=${encodeURIComponent(kod)}`:`https://tr.tradingview.com/symbols/BIST-${encodeURIComponent(kod)}/`;
   o.innerHTML=`<div class="scrim" data-act="kapat"><aside class="drawer" role="dialog" aria-modal="true" aria-label="${esc(kod)} detayı">
   <div class="drawer-h"><div><span class="label">${esc(h.tip)}</span><h2 style="font-size:24px">${esc(kod)}</h2><p class="muted small">${esc(p.ad||h.ad||"")}</p></div><button class="btn" data-act="kapat-btn">Kapat</button></div>
+  ${!f&&kodHatasi(kod)?`<ul class="warnlist"><li class="${kodHatasi(kod).bulunamadi?"bad":"warn"}"><span>${kodHatasi(kod).bulunamadi?`<b>${esc(kod)} kodu hiçbir fiyat kaynağında bulunamadı.</b> Yanlış yazılmış olabilir. Doğrusunu ekleyip bu kodu aşağıdaki düğmeyle silebilirsin.`:"Son denemede fiyat alınamadı."}<br><span class="small muted">${esc(kodHatasi(kod).tarih)} · ${esc(kodHatasi(kod).mesaj)}</span></span></li></ul>`:""}
   <div><div class="bigprice">${f?PX(f.fiyat)+" TL":"Fiyat yok"}</div>${f?`<div class="row" style="margin-block:4px">${kaliteHtml(f)}</div><p class="small muted">${esc(f.kaynak)} · ${esc(String(f.tarih||""))}${f.onceki?` · önceki kapanış ${PX(f.onceki)} <span class="${cls(f.fiyat-f.onceki)}">(${PCT(f.fiyat/f.onceki-1)})</span>`:""}</p>`:""}
   <p class="small row"><a href="${tv}" target="_blank" rel="noopener noreferrer">${h.tip==="Fon"?"TEFAS'ta fon detayı":"TradingView grafiği"} ↗</a>${h.tip!=="Fon"?`<a href="https://www.kap.org.tr/tr/bist-sirketler" target="_blank" rel="noopener noreferrer">KAP bildirimleri ↗</a>`:""}</p>${p.perf?`<p class="small num">Haftalık ${PCT(p.perf.hafta)} · Aylık ${PCT(p.perf.ay)} · Yıl içi ${PCT(p.perf.yil)}</p>`:""}</div>
   ${spark(kod)}
@@ -716,7 +739,7 @@ function renderDrawer(){
     <div class="stat"><span class="label">Temettü</span><span class="v">${TL(p.temettu)}</span></div>
     <div class="stat"><span class="label">Başabaş fiyatı</span><span class="v">${p.lot>0?PX((p.maliyet+p.komisyon-p.gerceklesen-p.temettu)/p.lot):"—"}</span><span class="small muted">komisyon, gerçekleşen kâr ve temettü dahil</span></div>
   </div>
-  ${p.satislar.length?`<div class="tbl-wrap"><table><thead><tr><th>Satış tarihi</th><th class="n">Lot</th><th class="n">Satış fiyatı</th><th class="n">Ort. alış fiyatı</th><th class="n">Kâr/zarar</th></tr></thead><tbody>${p.satislar.map(x=>`<tr><td class="num">${fmtDate(x.tarih)}</td><td class="n num">${LOT(x.lot)}</td><td class="n num">${PX(x.fiyat)}</td><td class="n num">${PX(x.ort)}</td><td class="n num ${cls(x.kazanc)}">${TLs(x.kazanc)}</td></tr>`).join("")}</tbody></table></div>`:""}
+  ${p.satislar.length?`<div class="tbl-wrap"><table><thead><tr><th>Satış tarihi</th><th class="n">Lot</th><th class="n">Satış fiyatı</th><th class="n">Ort. alış fiyatı</th><th class="n">Kâr/zarar</th></tr></thead><tbody>${p.satislar.map(x=>`<tr><td class="num">${x.tarih?fmtDate(x.tarih):"tarih yok"}</td><td class="n num">${LOT(x.lot)}</td><td class="n num">${PX(x.fiyat)}</td><td class="n num">${PX(x.ort)}</td><td class="n num ${cls(x.kazanc)}">${TLs(x.kazanc)}</td></tr>`).join("")}</tbody></table></div>`:""}
   <section class="panel"><h3>Satsam ne olur?</h3>
     <form class="form" id="f-sim" autocomplete="off"><div class="field"><label for="s-lot">Lot</label><input id="s-lot" inputmode="decimal" value="${p.lot>0?p.lot:""}"></div><div class="field"><label for="s-fiyat">Satış fiyatı</label><input id="s-fiyat" inputmode="decimal" value="${f?String(f.fiyat).replace(".",","):""}"></div><div class="field"><label for="s-kurum">Kurum</label><select id="s-kurum">${kurumOpts(S.defter.kurumlar[0]?.ad)}</select></div></form>
     <p class="num" id="sim-out"></p></section>`}
@@ -774,7 +797,7 @@ document.addEventListener("input",ev=>{
   const id=ev.target.id;
   if(id==="i-filtre"){ S.filtre=ev.target.value; const pos=ev.target.selectionStart; renderMain(); syncIslemForm(); const el=$("#i-filtre"); el.focus(); try{el.setSelectionRange(pos,pos);}catch(e){} return; }
   if(["i-lot","i-fiyat","i-kurum"].includes(id)) komOner();
-  if(id==="h-kod") ev.target.value=ev.target.value.toUpperCase();
+  if(id==="h-kod"){ const v=kodNorm(ev.target.value); if(v!==ev.target.value) ev.target.value=v; }
   if(["s-lot","s-fiyat","s-kurum"].includes(id)) simUpdate();
 });
 document.addEventListener("change",ev=>{ if(ev.target.id==="h-tip"){ const f=document.querySelector('[data-for="sinif"]'); if(f) f.hidden=ev.target.value!=="Fon"; } if(ev.target.id==="v-yil"){ S.vYil=ev.target.value; renderMain(); } if(ev.target.id==="i-tarih") komOner(); if(ev.target.id==="k-tip"){ const f=document.querySelector('[data-for="kademe"]'); if(f) f.hidden=ev.target.value!=="kademeli"; } if(ev.target.id==="i-tur") syncIslemForm(); if(ev.target.id==="i-kurum"||ev.target.id==="s-kurum"){ komOner(); simUpdate(); } if(ev.target.id==="xl-in") dosyaSec(ev.target.files?.[0]); if(ev.target.name==="ice-mod"){ S.iceMod=ev.target.value; renderModal(); } if(ev.target.id==="ice-izleme") S.iceIzleme=ev.target.checked; });
@@ -815,7 +838,7 @@ document.addEventListener("submit",async ev=>{
   }
   if(!guard()) return;
   if(id==="f-hisse"){
-    const kod=$("#h-kod").value.trim().toUpperCase(), tip=$("#h-tip").value, ad=$("#h-ad").value.trim(), hedef=parseNum($("#h-hedef").value), stop=parseNum($("#h-stop").value);
+    const kod=kodNorm($("#h-kod").value), tip=$("#h-tip").value, ad=$("#h-ad").value.trim(), hedef=parseNum($("#h-hedef").value), stop=parseNum($("#h-stop").value);
     const err=$("#h-err");
     if(!KOD_RE.test(kod)) return err.textContent="Kod 2–8 harf ya da rakam olmalı (örn. THYAO, AFT).";
     if(S.defter.hisseler.some(h=>h.kod===kod)) return err.textContent=kod+" zaten listede.";
@@ -826,7 +849,8 @@ document.addEventListener("submit",async ev=>{
     const err=$("#i-err"); const tur=$("#i-tur").value;
     const x={kod:$("#i-kod").value,tarih:$("#i-tarih").value,tur,lot:parseNum($("#i-lot").value),fiyat:parseNum($("#i-fiyat").value),komisyon:parseNum($("#i-kom").value),kurum:$("#i-kurum").value,grup:$("#i-grup").value.trim(),not:$("#i-not").value.trim(),tutar:parseNum($("#i-tutar").value)};
     if(!x.kod) return err.textContent="Hisse seç.";
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(x.tarih)) return err.textContent="Tarih gir.";
+    if($("#i-tarih").validity?.badInput||(x.tarih&&!/^\d{4}-\d{2}-\d{2}$/.test(x.tarih))) return err.textContent="Tarih eksik ya da geçersiz. Düzelt ya da tamamen boş bırak.";
+    if(!x.tarih) x.girildi=(S.edit&&S.defter.islemler.find(y=>y.id===S.edit)?.girildi)||today(); // dividends are only looked up from this day on
     if(tur==="Temettü"){ if(!(x.tutar>0)) return err.textContent="Temettü tutarını gir."; x.lot=0;x.fiyat=0;x.komisyon=0; }
     else { if(!(x.lot>0)) return err.textContent="Lot sıfırdan büyük olmalı."; if(tur==="Bedelsiz"){x.fiyat=0;x.komisyon=0;} else if(!(x.fiyat>0)) return err.textContent="Fiyat sıfırdan büyük olmalı."; if(!(x.komisyon>=0)) x.komisyon=0; x.tutar=null; }
     if(S.edit){ const i=S.defter.islemler.findIndex(y=>y.id===S.edit); if(i>=0) S.defter.islemler[i]=Object.assign({},S.defter.islemler[i],x); S.edit=null; commit("İşlem güncellendi"); }
@@ -899,14 +923,14 @@ async function xlsxDisa(){
     ...Object.values(c.poz).map(p=>{const h=S.defter.hisseler.find(x=>x.kod===p.kod)||{}; return [p.kod,p.tip,p.ad||"",p.bozuk?null:p.lot,p.bozuk?null:p.ort,p.f?p.f.fiyat:null,p.f?(p.f.kaynak+" "+(p.f.tarih||"")):"",p.bozuk?null:r2(p.maliyet),p.bozuk?null:r2(p.deger),p.bozuk?null:r2(p.kz),p.kzYuzde,p.bozuk?null:r2(p.gerceklesen),r2(p.temettu),r2(p.komisyon),h.hedef||null,h.stop||null,p.bozuk?"Kayıt eksik":p.lot>0?"Açık":"Kapalı / izleme"];})],
     [8,7,26,10,14,13,26,16,16,16,11,16,14,12,12,12,16],[null,null,null,"lot","px","px",null,"tl","tl","tl","pct","tl","tl","tl","px","px",null]);
   add("İşlemler",[["ISLEM_NO","HISSE","TARIH","ISLEM","LOT","FIYAT","TUTAR","KOMISYON","TEMETTU","ISLEM_GRUBU","ARACI_KURUM","NOT","KONTROL"],
-    ...[...S.defter.islemler].sort((a,b)=>a.tarih<b.tarih?-1:a.tarih>b.tarih?1:(a.t||0)-(b.t||0)).map(x=>[x.no??"",x.kod,D(x.tarih),x.tur,x.tur==="Temettü"?null:x.lot,x.tur==="Alış"||x.tur==="Satış"?x.fiyat:null,x.tur==="Temettü"?null:r2(x.lot*x.fiyat),x.komisyon||null,x.tur==="Temettü"?x.tutar:null,x.grup||"",x.kurum||"",x.not||"",c.satir[x.id]?.msg||""])],
+    ...[...S.defter.islemler].sort(siraKarsilastir).map(x=>[x.no??"",x.kod,D(x.tarih),x.tur,x.tur==="Temettü"?null:x.lot,x.tur==="Alış"||x.tur==="Satış"?x.fiyat:null,x.tur==="Temettü"?null:r2(x.lot*x.fiyat),x.komisyon||null,x.tur==="Temettü"?x.tutar:null,x.grup||"",x.kurum||"",x.not||"",c.satir[x.id]?.msg||""])],
     [8,8,11,10,10,13,16,12,13,14,18,24,50],[null,null,null,null,"lot","px","tl","tl","tl",null,null,null,null]);
   add("DATA",[["ISLEM_NO","ARACI_KURUM","HISSE","TARIH","ALINAN_LOT","SATILAN_LOT","ALIS_FIYATI","SATIS_FIYATI","ALIS_TOPLAM","SATIS_TOPLAM","KOMISYON","TEMETTU","ISLEM_GRUBU"],
     ...[...S.defter.islemler].sort((a,b)=>(+a.no||0)-(+b.no||0)).map(x=>{const al=x.tur==="Alış"||x.tur==="Bedelsiz", st=x.tur==="Satış"; return [x.no??"",x.kurum||"",x.kod,D(x.tarih),al?x.lot:null,st?x.lot:null,x.tur==="Alış"?x.fiyat:null,st?x.fiyat:null,x.tur==="Alış"?r2(x.lot*x.fiyat):null,st?r2(x.lot*x.fiyat):null,x.komisyon||null,x.tur==="Temettü"?x.tutar:null,x.grup||""];})],
     [9,18,8,11,11,11,13,13,16,16,12,13,12],[null,null,null,null,"lot","lot","px","px","tl","tl","tl","tl",null]);
   const yil={}; for(const o of c.olaylar.filter(o=>!c.poz[o.kod]?.bozuk)){ const y=yil[o.yil] ||= {hisse:0,fon:0,fonStopaj:0,brut:0,tStopaj:0,net:0}; if(o.tur==="satis"){ if(o.tip==="Fon"){y.fon+=o.kazanc;y.fonStopaj+=o.stopaj;} else y.hisse+=o.kazanc; } else { y.brut+=o.brut;y.tStopaj+=o.stopaj;y.net+=o.net; } }
   const vRows=[["Yıl","Hisse alım-satım kazancı (stopaj %0)","Fon satış kazancı","Fon tahmini stopajı","Brüt temettü","Kesilen temettü stopajı","Net temettü","Brüt temettünün yarısı (istisna dışı kısım)"],
-    ...Object.keys(yil).sort().map(k=>{const y=yil[k]; return [k,r2(y.hisse),r2(y.fon),r2(y.fonStopaj),r2(y.brut),r2(y.tStopaj),r2(y.net),r2(y.brut/2)];})];
+    ...Object.keys(yil).sort((a,b)=>a===TARIHSIZ?1:b===TARIHSIZ?-1:a<b?-1:1).map(k=>{const y=yil[k]; return [k,r2(y.hisse),r2(y.fon),r2(y.fonStopaj),r2(y.brut),r2(y.tStopaj),r2(y.net),r2(y.brut/2)];})];
   add("Vergi",[...vRows,[],["Not: Ödenecek gelir vergisi tüm yıllık gelirlerine göre hesaplanır; bu dosya yalnızca bu defterdeki tutarları gösterir. Vergi danışmanlığı değildir."]],[8,24,18,18,16,18,16,26],[null,"tl","tl","tl","tl","tl","tl","tl"]);
   add("Ayarlar",[["PORTFOY_DEFTERI_AYARLAR","Bu sayfa Excel'i geri yüklediğinde hisse listesi, hedefler ve komisyon tabloları da geri gelsin diye vardır."],[],["HISSELER"],["KOD","TUR","AD","HEDEF","STOP","VERGI_SINIFI"],
     ...S.defter.hisseler.map(h=>[h.kod,h.tip||"Hisse",h.ad||"",h.hedef||null,h.stop||null,h.vergiSinifi||""]),[],["KURUMLAR"],["AD","TIP","DEGER","MIN","BSMV","GUN","KADEMELER"],
@@ -918,48 +942,91 @@ async function xlsxDisa(){
 }
 function splitCsv(line,sep){ const out=[];let cur="",q=false; for(let i=0;i<line.length;i++){const c=line[i]; if(q){ if(c==='"'&&line[i+1]==='"'){cur+='"';i++;} else if(c==='"') q=false; else cur+=c; } else if(c==='"') q=true; else if(c===sep){out.push(cur);cur="";} else cur+=c;} out.push(cur); return out.map(s=>s.trim()); }
 const normH=h=>String(h??"").toLocaleUpperCase("tr-TR").replace(/İ/g,"I").replace(/Ş/g,"S").replace(/Ç/g,"C").replace(/Ğ/g,"G").replace(/Ü/g,"U").replace(/Ö/g,"O").replace(/Â/g,"A").replace(/Î/g,"I").replace(/Û/g,"U").trim().replace(/\s+/g,"_");
+// Excel date cell → "YYYY-MM-DD", or null when the cell is empty or not a real date (the trade is then kept without a date).
 function tarihIso(v){
-  if(v instanceof Date && !isNaN(v)) return v.getFullYear()+"-"+String(v.getMonth()+1).padStart(2,"0")+"-"+String(v.getDate()).padStart(2,"0");
-  if(typeof v==="number" && v>20000 && v<80000){ const d=new Date(Math.floor(v+1e-6-25569)*864e5); return d.getUTCFullYear()+"-"+String(d.getUTCMonth()+1).padStart(2,"0")+"-"+String(d.getUTCDate()).padStart(2,"0"); }
-  const s=String(v??""); const dm=/(\d{1,2})[./-](\d{1,2})[./-](\d{4})/.exec(s); if(dm) return `${dm[3]}-${dm[2].padStart(2,"0")}-${dm[1].padStart(2,"0")}`;
-  const iso=/(\d{4})-(\d{2})-(\d{2})/.exec(s); return iso?iso[0]:null;
+  let y,m,d;
+  if(v instanceof Date){ if(isNaN(v)) return null; y=v.getFullYear(); m=v.getMonth()+1; d=v.getDate(); }
+  else if(typeof v==="number" || /^\d{5}(\.\d+)?$/.test(String(v??"").trim())){ const n=+v; if(!(n>20000&&n<80000)) return null; const t=new Date(Math.floor(n+1e-6-25569)*864e5); y=t.getUTCFullYear(); m=t.getUTCMonth()+1; d=t.getUTCDate(); }
+  else {
+    const s=String(v??"").trim(); let r;
+    if((r=/(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?!\d)/.exec(s))){ y=+r[1]; m=+r[2]; d=+r[3]; }
+    else if((r=/(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](\d{4}|\d{2})(?!\d)/.exec(s))){ d=+r[1]; m=+r[2]; y=+r[3];
+      if(r[3].length===2) y+= y<=(new Date().getFullYear()%100)+1?2000:1900;
+      if(m>12&&d<=12){ const t=d; d=m; m=t; } } // 03/25/2024 written month-first
+    else return null;
+  }
+  if(!(y>=1980&&y<=2100&&m>=1&&m<=12&&d>=1&&d<=31)) return null;
+  if(new Date(Date.UTC(y,m-1,d)).getUTCDate()!==d) return null; // 31.02 and the like
+  return y+"-"+String(m).padStart(2,"0")+"-"+String(d).padStart(2,"0");
 }
 const metin=v=>String(v??"").trim();
 
 /* ---------- import: read a file into a package first, show it, apply only when the viewer confirms ---------- */
 // Transactions: this page's own "İşlemler" sheet (ISLEM column), the old program's DATA layout (ALINAN_LOT / SATILAN_LOT …)
 // or any table with Hisse/Kod + Tarih (+ İşlem türü, Lot/Adet, Fiyat, Komisyon) columns. Header names are matched loosely.
-const BASLIK={HISSE:["HISSE","KOD","HISSE_KODU","SEMBOL","FON","FON_KODU","MENKUL","ENSTRUMAN"],TARIH:["TARIH","ISLEM_TARIHI"],
-  ISLEM:["ISLEM","ISLEM_TURU","ISLEM_TIPI","TUR","TIP","YON","ALIS/SATIS","ALIS_SATIS"],LOT:["LOT","ADET","MIKTAR","PAY","PAY_ADEDI","NOMINAL"],
-  FIYAT:["FIYAT","BIRIM_FIYAT","ISLEM_FIYATI"],KOMISYON:["KOMISYON","KOMISYON_TUTARI","MASRAF"],TEMETTU:["TEMETTU","TEMETTU_TUTARI","KAR_PAYI"],
-  TUTAR:["TUTAR","ISLEM_TUTARI"],ARACI_KURUM:["ARACI_KURUM","KURUM"],ISLEM_GRUBU:["ISLEM_GRUBU","GRUP"],NOT:["NOT","ACIKLAMA"]};
+const BASLIK={HISSE:["HISSE","KOD","HISSE_KODU","SEMBOL","FON","FON_KODU","MENKUL","MENKUL_KIYMET","ENSTRUMAN","KIYMET","KIYMET_KODU","VARLIK_KODU","SYMBOL","TICKER"],
+  TARIH:["TARIH","ISLEM_TARIHI","ALIS_TARIHI","TARIHI","TARIH/SAAT","TARIH_SAAT","DATE"],
+  ISLEM:["ISLEM","ISLEM_TURU","ISLEM_TIPI","ISLEM_YONU","TUR","TIP","YON","ALIS/SATIS","ALIS_SATIS","AL/SAT","AL_SAT"],
+  LOT:["LOT","ADET","MIKTAR","PAY","PAY_ADEDI","NOMINAL","LOT_SAYISI","LOT_ADEDI","ADET/LOT","LOT/ADET","ELDEKI_LOT","ALIS_LOT","ALIS_ADEDI","QUANTITY"],
+  FIYAT:["FIYAT","BIRIM_FIYAT","ISLEM_FIYATI","GERCEKLESEN_FIYAT","PRICE"],
+  // purchase price columns of a simple holdings list (used when there is no plain Fiyat column)
+  ALIS_FIYAT:["ALIS_FIYATI","ALIS_FIYAT","ORT_ALIS_FIYATI","ORTALAMA_ALIS_FIYATI","ORT_ALIS","ORTALAMA_ALIS","ORTALAMA_MALIYET","ORT_MALIYET","BIRIM_MALIYET","MALIYET_FIYATI","MALIYET","ALIS"],
+  KOMISYON:["KOMISYON","KOMISYON_TUTARI","KOMISYON_BSMV","KOMISYON+BSMV","MASRAF"],TEMETTU:["TEMETTU","TEMETTU_TUTARI","KAR_PAYI"],
+  TUTAR:["TUTAR","ISLEM_TUTARI","TOPLAM_TUTAR","NET_TUTAR","ALIS_TUTARI","TOPLAM_MALIYET"],ARACI_KURUM:["ARACI_KURUM","KURUM"],ISLEM_GRUBU:["ISLEM_GRUBU","GRUP"],NOT:["NOT","ACIKLAMA"]};
 const normB=h=>normH(h).replace(/\([^)]*\)/g,"").replace(/[^A-Z0-9_\/]/g,"_").replace(/_+/g,"_").replace(/^_|_$/g,"");
 // TEFAS fund codes have three characters; BIST share tickers have four or more.
 const tahminTip=k=>/^[A-Z][A-Z0-9]{2}$/.test(k)?"Fon":"Hisse";
 function turNorm(v){ const t=metin(v); if(TYPES.includes(t)) return t; const n=normB(t);
   if(["ALIS","AL","ALIM","BUY","A"].includes(n)) return "Alış"; if(["SATIS","SAT","SATIM","SELL","S"].includes(n)) return "Satış";
   if(["BEDELSIZ","BEDELSIZ_PAY","BONUS"].includes(n)) return "Bedelsiz"; if(["TEMETTU","KAR_PAYI","TEMETTU_GELIRI","DIVIDEND"].includes(n)) return "Temettü"; return ""; }
+// "Hisse" / "Fon" written in a Tür column describe the instrument, not the trade
+const varlikTipi=v=>{ const n=normB(v); return ["HISSE","HISSE_SENEDI","PAY","PAY_SENEDI"].includes(n)?"Hisse":["FON","YATIRIM_FONU","TEFAS","TEFAS_FONU"].includes(n)?"Fon":""; };
+// Reads a transaction table. The date is optional: rows without one are kept as undated trades.
+// Layouts: this app's İşlemler sheet (ISLEM column), the old program's DATA sheet (ALINAN_LOT / SATILAN_LOT …),
+// any table with Hisse/Kod + İşlem türü + Lot + Fiyat, or a plain holdings list (Hisse + Lot + alış fiyatı/maliyet).
 function islemOku(rows){
-  const var_=(r,n)=>r.some(c=>BASLIK[n].includes(normB(c)));
-  const hi=rows.findIndex(r=>var_(r,"HISSE")&&var_(r,"TARIH")); if(hi<0) return null;
+  const var_=(r,n)=>r.some(c=>BASLIK[n].includes(normB(c))), ham=(r,n)=>r.some(c=>normB(c)===n);
+  const hi=rows.findIndex(r=>var_(r,"HISSE")&&(var_(r,"TARIH")||var_(r,"LOT")||var_(r,"FIYAT")||var_(r,"ALIS_FIYAT")||ham(r,"ALINAN_LOT")||ham(r,"SATILAN_LOT"))); if(hi<0) return null;
   const H=rows[hi].map(normB); const ix=n=>BASLIK[n]?H.findIndex(h=>BASLIK[n].includes(h)):H.indexOf(n);
   const hk=ix("HISSE"), ikinci=H.findIndex((h,i)=>i>hk&&h==="HISSE"); // old program keeps a helper stock list in a second HISSE column
-  const out={islemler:[],izleme:new Set(),atlanan:0};
-  for(const r of rows.slice(hi+1)){
-    if(ikinci>=0){ const k=metin(r[ikinci]).toUpperCase(); if(KOD_RE.test(k)&&/[A-Z]/.test(k)) out.izleme.add(k); }
+  const eskiDuzen=H.includes("ALINAN_LOT")||H.includes("SATILAN_LOT");
+  const out={islemler:[],izleme:new Set(),atlanan:0,atlananSatir:[],tarihsiz:0,tipler:{}};
+  const atla=(satir,neden)=>{ out.atlanan++; if(out.atlananSatir.length<8) out.atlananSatir.push({satir,neden}); };
+  rows.slice(hi+1).forEach((r,j)=>{
+    const satir=hi+j+2; // spreadsheet row number
+    if(ikinci>=0){ const k=kodNorm(metin(r[ikinci])); if(KOD_RE.test(k)&&/[A-Z]/.test(k)) out.izleme.add(k); }
     const g=k=>ix(k)>=0?r[ix(k)]:"";
-    const kod=metin(g("HISSE")).toUpperCase(); if(!kod||kod==="0") continue;
-    if(!KOD_RE.test(kod)||!/[A-Z]/.test(kod)){ out.atlanan++; continue; }
-    const tarih=tarihIso(g("TARIH")); if(!tarih){ out.atlanan++; continue; }
-    const base={no:parseInt(g("ISLEM_NO"),10)||null,kod,tarih,komisyon:parseNum(g("KOMISYON"))||0,grup:metin(g("ISLEM_GRUBU")).replace(/^0$/,""),kurum:metin(g("ARACI_KURUM")).replace(/^0$/,""),not:metin(g("NOT"))};
-    const tur=turNorm(g("ISLEM"));
-    if(tur){ out.islemler.push(Object.assign(base,tur==="Temettü"?{tur,lot:0,fiyat:0,komisyon:0,tutar:parseNum(g("TEMETTU"))||parseNum(g("TUTAR"))||0}:{tur,lot:parseNum(g("LOT"))||0,fiyat:tur==="Bedelsiz"?0:(parseNum(g("FIYAT"))||0)})); continue; }
-    const al=parseNum(g("ALINAN_LOT")), sat=parseNum(g("SATILAN_LOT")), af=parseNum(g("ALIS_FIYATI")), sf=parseNum(g("SATIS_FIYATI")), tem=parseNum(g("TEMETTU"));
-    if(al>0) out.islemler.push(Object.assign({},base,af>0?{tur:"Alış",lot:al,fiyat:af}:{tur:"Bedelsiz",lot:al,fiyat:0,komisyon:0}));
-    if(sat>0) out.islemler.push(Object.assign({},base,{tur:"Satış",lot:sat,fiyat:sf||0},al>0?{komisyon:0}:{}));
-    if(tem>0) out.islemler.push(Object.assign({},base,{tur:"Temettü",lot:0,fiyat:0,komisyon:0,tutar:tem}));
-    if(!(al>0)&&!(sat>0)&&!(tem>0)) out.atlanan++;
-  }
+    const kh=metin(g("HISSE")).replace(/^BIST\s*:\s*/i,""), km=/^([0-9A-Za-zÇĞİÖŞÜçğıöşü]{2,8}(?:\.(?:E|IS))?)\s*[-–—(|]/.exec(kh);
+    const kod=kodNorm(km?km[1]:kh); if(!kod||kod==="0") return;
+    if(!KOD_RE.test(kod)||!/[A-Z]/.test(kod)) return atla(satir,"kod anlaşılamadı");
+    const tarih=tarihIso(g("TARIH"))||"";
+    const base={no:parseInt(g("ISLEM_NO"),10)||null,kod,tarih,komisyon:Math.abs(parseNum(g("KOMISYON")))||0,grup:metin(g("ISLEM_GRUBU")).replace(/^0$/,""),kurum:metin(g("ARACI_KURUM")).replace(/^0$/,""),not:metin(g("NOT"))};
+    const n0=out.islemler.length, ekle=x=>out.islemler.push(Object.assign({},base,x));
+    const islemHucre=metin(g("ISLEM")), vt=varlikTipi(islemHucre); if(vt) out.tipler[kod]=vt;
+    const tur=turNorm(islemHucre);
+    const lotH=parseNum(g("LOT")), fiyH=parseNum(g("FIYAT")), alisF=parseNum(g("ALIS_FIYAT")), tutH=Math.abs(parseNum(g("TUTAR")));
+    const birim=(lot,...adaylar)=>{ for(const v of adaylar) if(v>0) return v; return lot>0&&tutH>0?tutH/lot:0; };
+    if(tur==="Temettü") ekle({tur,lot:0,fiyat:0,komisyon:0,tutar:Math.abs(parseNum(g("TEMETTU")))||tutH||0});
+    else if(tur==="Bedelsiz"){ const lot=Math.abs(lotH)||0; if(!(lot>0)) return atla(satir,"lot yok"); ekle({tur,lot,fiyat:0,komisyon:0}); }
+    else if(tur){ const lot=Math.abs(lotH)||0; if(!(lot>0)) return atla(satir,"lot yok");
+      const f=birim(lot,fiyH,tur==="Alış"?alisF:parseNum(g("SATIS_FIYATI"))); if(!(f>0)) return atla(satir,"fiyat yok");
+      ekle({tur,lot,fiyat:f}); }
+    else if(islemHucre&&!vt) return atla(satir,"işlem türü anlaşılamadı ("+islemHucre.slice(0,20)+")");
+    else if(eskiDuzen){
+      const al=parseNum(g("ALINAN_LOT")), sat=parseNum(g("SATILAN_LOT")), af=parseNum(g("ALIS_FIYATI")), sf=parseNum(g("SATIS_FIYATI")), tem=parseNum(g("TEMETTU"));
+      if(al>0) ekle(af>0?{tur:"Alış",lot:al,fiyat:af}:{tur:"Bedelsiz",lot:al,fiyat:0,komisyon:0});
+      if(sat>0) ekle(Object.assign({tur:"Satış",lot:sat,fiyat:sf||0},al>0?{komisyon:0}:{}));
+      if(tem>0) ekle({tur:"Temettü",lot:0,fiyat:0,komisyon:0,tutar:tem});
+      if(out.islemler.length===n0) return atla(satir,"alınan/satılan lot yok");
+    } else {
+      // no trade type: a holdings list. Positive lot = purchase, negative lot = sale.
+      if(!(Math.abs(lotH)>0)) return atla(satir,"lot yok");
+      const lot=Math.abs(lotH), f=birim(lot,alisF,fiyH);
+      if(!(f>0)) return atla(satir,"alış fiyatı yok");
+      ekle({tur:lotH<0?"Satış":"Alış",lot,fiyat:f});
+    }
+    if(!tarih) out.tarihsiz+=out.islemler.length-n0;
+  });
   return out;
 }
 // Old program's BANKA_ISLEMLERI: cash rows from row 17 (A–E); up to 7 brokers in F2:F8, each with a tier table every 14 rows (H/I/J).
@@ -984,7 +1051,7 @@ function ayarOku(rows){
     if(bolum==="AYARLAR"){ if(a==="BEYAN_SINIRI"&&parseNum(r[1])>0) out.ayarlar.beyanSiniri=parseNum(r[1]); if(false&&a==="MALIYET_YONTEMI"&&["ortalama","fifo","net"].includes(metin(r[1]))) out.ayarlar.maliyetYontemi=metin(r[1]); continue; }
     if(!H){ H=r.map(normH); continue; }
     const g=k=>r[H.indexOf(k)];
-    if(bolum==="HISSELER"){ const kod=metin(g("KOD")).toUpperCase(); if(!KOD_RE.test(kod)) continue;
+    if(bolum==="HISSELER"){ const kod=kodNorm(metin(g("KOD"))); if(!KOD_RE.test(kod)) continue;
       const tip=metin(g("TUR"))==="Fon"?"Fon":"Hisse"; const s=metin(g("VERGI_SINIFI"));
       out.hisseler.push({kod,tip,ad:metin(g("AD")).slice(0,60),hedef:parseNum(g("HEDEF"))>0?parseNum(g("HEDEF")):null,stop:parseNum(g("STOP"))>0?parseNum(g("STOP")):null,vergiSinifi:tip==="Fon"&&FON_SINIF[s]?s:(tip==="Fon"?"diger":null)}); }
     if(bolum==="KURUMLAR"){ const ad=metin(g("AD")).slice(0,40); if(!ad) continue; const tip=["oran","sabit","kademeli"].includes(metin(g("TIP")))?metin(g("TIP")):"oran";
@@ -993,6 +1060,7 @@ function ayarOku(rows){
   }
   return out;
 }
+const BASLIK_ACIKLAMA="Dosyada tanınan bir işlem tablosu yok. Başlık satırında en az Hisse (ya da Kod) ve Lot (ya da Adet) sütunları olmalı; İşlem türü (Alış/Satış), Fiyat (ya da Alış fiyatı / Maliyet), Tarih ve Komisyon sütunları da okunur. Tarih zorunlu değil.";
 function dosyaOku(file){
   return new Promise((res,rej)=>{
     const excel=/\.(xlsx|xlsm|xls)$/i.test(file.name), csv=/\.csv$/i.test(file.name);
@@ -1001,25 +1069,25 @@ function dosyaOku(file){
     const rd=new FileReader();
     rd.onerror=()=>rej(new Error("Dosya okunamadı."));
     rd.onload=()=>{ try{
-      const P={dosya:file.name,kaynak:"",islemler:[],kurumlar:[],hisseler:[],izleme:[],ayarlar:null,atlanan:0};
+      const P={dosya:file.name,kaynak:"",islemler:[],kurumlar:[],hisseler:[],izleme:[],ayarlar:null,atlanan:0,atlananSatir:[],tarihsiz:0,tipler:{}};
       if(excel){
         if(!xlsxHazir()) throw new Error("Excel okuyucu yüklenemedi. Sayfayı yenileyip tekrar dene.");
         const X=window.XLSX, wb=X.read(new Uint8Array(rd.result),{type:"array"}); // dates stay Excel serials; converted with UTC math in tarihIso
         const tam=nm=>{ const ws=wb.Sheets[nm]; const rg=X.utils.decode_range(ws["!ref"]||"A1:A1"); rg.s.r=0; rg.s.c=0; return X.utils.sheet_to_json(ws,{header:1,raw:true,defval:"",range:rg,blankrows:true}); };
         const ad=n=>wb.SheetNames.find(s=>normH(s)===n);
         const sira=[ad("ISLEMLER"),ad("DATA"),...wb.SheetNames].filter((v,i,a)=>v&&a.indexOf(v)===i);
-        let isl=null; for(const nm of sira){ isl=islemOku(tam(nm)); if(isl) break; }
-        if(isl){ P.islemler=isl.islemler; P.izleme=[...isl.izleme]; P.atlanan=isl.atlanan; }
+        let isl=null; for(const [i,nm] of sira.entries()){ const r=islemOku(tam(nm)); if(!r) continue; if(!isl||r.islemler.length>isl.islemler.length) isl=r; if(r.islemler.length&&(nm===ad("ISLEMLER")||nm===ad("DATA"))) break; }
+        if(isl){ P.islemler=isl.islemler; P.izleme=[...isl.izleme]; P.atlanan=isl.atlanan; P.atlananSatir=isl.atlananSatir; P.tarihsiz=isl.tarihsiz; P.tipler=isl.tipler; }
         if(ad("BANKA_ISLEMLERI")){ const b=bankaOku(tam(ad("BANKA_ISLEMLERI"))); P.kurumlar.push(...b.kurumlar); }
         if(ad("AYARLAR")){ const a=ayarOku(tam(ad("AYARLAR"))); P.hisseler=a.hisseler; P.kurumlar.push(...a.kurumlar); if(Object.keys(a.ayarlar).length) P.ayarlar=a.ayarlar; }
         P.kaynak=ad("BANKA_ISLEMLERI")||ad("ANA_SAYFA")?"Eski Excel takip programı":ad("AYARLAR")?"Portföy Defteri'nden indirilmiş Excel":"Excel tablosu";
-        if(!isl&&!P.hisseler.length&&!P.kurumlar.length) throw new Error("Dosyada tanınan bir sayfa yok. İşlem tablosunun başlık satırında en az Hisse (ya da Kod) ve Tarih sütunları olmalı; İşlem türü (Alış/Satış), Lot (ya da Adet), Fiyat ve Komisyon sütunları da okunur.");
+        if(!isl&&!P.hisseler.length&&!P.kurumlar.length) throw new Error(BASLIK_ACIKLAMA);
       } else {
         const txt=String(rd.result).replace(/^﻿/,""); const lines=txt.split(/\r?\n/).filter(l=>l.trim());
         if(!lines.length) throw new Error("Dosya boş.");
         const sep=(lines[0].split(";").length>=lines[0].split(",").length)?";":",";
-        const isl=islemOku(lines.map(l=>splitCsv(l,sep))); if(!isl) throw new Error("HISSE ve TARIH sütunları bulunamadı.");
-        P.islemler=isl.islemler; P.atlanan=isl.atlanan; P.kaynak="CSV dosyası";
+        const isl=islemOku(lines.map(l=>splitCsv(l,sep))); if(!isl) throw new Error(BASLIK_ACIKLAMA);
+        P.islemler=isl.islemler; P.atlanan=isl.atlanan; P.atlananSatir=isl.atlananSatir; P.tarihsiz=isl.tarihsiz; P.tipler=isl.tipler; P.kaynak="CSV dosyası";
       }
       P.izleme=P.izleme.filter(k=>!P.islemler.some(x=>x.kod===k)&&!P.hisseler.some(h=>h.kod===k));
       res(P);
@@ -1050,15 +1118,18 @@ function renderModal(){
     <p class="small muted">${esc(P.dosya)} · ${esc(P.kaynak)} · dosya bu cihazda okundu, hiçbir yere gönderilmedi</p>
     <div><h3>Dosyada bulunanlar</h3><ul class="prose small" style="margin:6px 0 0">
       ${li(P.islemler.length,"işlem"+(kodlar.length?` (${kodlar.length} farklı kod: ${esc(kodlar.slice(0,12).join(", "))}${kodlar.length>12?"…":""})`:""))}
-      ${(()=>{ const f=kodlar.filter(k=>tahminTip(k)==="Fon"&&!P.hisseler.some(h=>h.kod===k)&&!(kayitli&&S.iceMod==="ekle"&&S.defter.hisseler.some(h=>h.kod===k))); return f.length?`<li>${esc(f.join(", "))} üç harfli olduğu için <b>TEFAS fonu</b> olarak eklenecek. Yanlışsa sonra hisse detayından değiştirebilirsin.</li>`:""; })()}
+      ${(()=>{ const f=kodlar.filter(k=>(P.tipler?.[k]||tahminTip(k))==="Fon"&&!P.tipler?.[k]&&!P.hisseler.some(h=>h.kod===k)&&!(kayitli&&S.iceMod==="ekle"&&S.defter.hisseler.some(h=>h.kod===k))); return f.length?`<li>${esc(f.join(", "))} üç harfli olduğu için <b>TEFAS fonu</b> olarak eklenecek. Yanlışsa sonra hisse detayından değiştirebilirsin.</li>`:""; })()}
       ${li(P.kurumlar.length,"aracı kurum ve komisyon tablosu ("+esc(P.kurumlar.map(k=>k.ad).join(", "))+")")}
       ${li(P.hisseler.length,"kayıtlı hisse / fon ayarı (hedef, stop, fon vergi sınıfı)")}
       ${P.ayarlar?`<li>Beyan sınırı ayarı</li>`:""}
-      ${P.atlanan?`<li class="down">${P.atlanan} satır okunamadı (kod, tarih ya da işlem türü anlaşılamadı) ve alınmayacak.</li>`:""}
+      ${(()=>{ const sup=[...new Set(P.islemler.filter(x=>(x.tur==="Alış"||x.tur==="Satış")&&x.fiyat>0&&(()=>{ const f=fiyatOf(x.kod); return f&&f.fiyat>0&&(x.fiyat/f.fiyat>10||x.fiyat/f.fiyat<0.1); })()).map(x=>x.kod))];
+        return sup.length?`<li class="down"><b>${esc(sup.join(", "))}</b>: dosyadaki fiyat güncel fiyattan 10 kattan fazla farklı. Fiyat sütunu birim fiyat değil toplam tutar olabilir; yükledikten sonra İşlemler sekmesinden kontrol et.</li>`:""; })()}
+      ${P.tarihsiz?`<li><b class="num">${P.tarihsiz}</b> işlemde tarih yok. Sorun değil: kâr/zarar alış fiyatına göre hesaplanır, tarihten etkilenmez. Tarihsiz alışlar en eski, tarihsiz satışlar en yeni işlem sayılır; bulunan temettüler bu kayıtlar için bugünden itibaren aranır.</li>`:""}
+      ${P.atlanan?`<li class="down">${P.atlanan} satır okunamadı ve alınmayacak: ${(P.atlananSatir||[]).map(a=>"satır "+a.satir+" ("+esc(a.neden)+")").join(", ")}${P.atlanan>(P.atlananSatir||[]).length?"…":""}</li>`:""}
     </ul></div>
-    ${!P.islemler.length?`<div class="banner err"><p><b>Bu dosyada alış/satış kaydı yok, bu yüzden yükleyince hisse görünmez.</b> ${/Eski Excel/.test(P.kaynak)?"Eski programda işlemler DATA sayfasında tutulur; bu dosyanın DATA sayfası boş (programın boş şablonu olabilir).":"İşlem tablosunun başlık satırında en az Hisse (ya da Kod) ve Tarih sütunları olmalı; İşlem türü (Alış/Satış), Lot (ya da Adet), Fiyat ve Komisyon sütunları da okunur."}</p></div>`:""}
+    ${!P.islemler.length?`<div class="banner err"><p><b>Bu dosyada alış/satış kaydı yok, bu yüzden yükleyince hisse görünmez.</b> ${/Eski Excel/.test(P.kaynak)?"Eski programda işlemler DATA sayfasında tutulur; bu dosyanın DATA sayfası boş (programın boş şablonu olabilir).":esc(BASLIK_ACIKLAMA)}</p></div>`:""}
     ${P.izleme.length?`<label class="check" for="ice-izleme"><input type="checkbox" id="ice-izleme" ${S.iceIzleme?"checked":""}><span>İşlemi olmayan ${P.izleme.length} kodu izleme listesine ekle <span class="muted small">(${esc(P.izleme.slice(0,10).join(", "))}${P.izleme.length>10?"…":""})</span></span></label>`:""}
-    ${ornek.length?`<div class="tbl-wrap"><table><thead><tr><th>Tarih</th><th>Kod</th><th>İşlem</th><th class="n">Lot</th><th class="n">Fiyat</th><th class="n">Komisyon</th><th>Kurum</th></tr></thead><tbody>${ornek.map(x=>`<tr><td class="num">${fmtDate(x.tarih)}</td><td class="num">${esc(x.kod)}</td><td><span class="pill ${pc[x.tur]}">${esc(x.tur)}</span></td><td class="n num">${x.tur==="Temettü"?"—":LOT(x.lot)}</td><td class="n num">${x.tur==="Temettü"?TL(x.tutar):x.fiyat?PX(x.fiyat):"—"}</td><td class="n num">${x.komisyon?nf2.format(x.komisyon):"—"}</td><td>${esc(x.kurum||"—")}</td></tr>`).join("")}</tbody></table></div>${P.islemler.length>8?`<p class="small muted">İlk 8 işlem gösteriliyor.</p>`:""}`:""}
+    ${ornek.length?`<div class="tbl-wrap"><table><thead><tr><th>Tarih</th><th>Kod</th><th>İşlem</th><th class="n">Lot</th><th class="n">Fiyat</th><th class="n">Komisyon</th><th>Kurum</th></tr></thead><tbody>${ornek.map(x=>`<tr><td class="num">${x.tarih?fmtDate(x.tarih):`<span class="muted">tarih yok</span>`}</td><td class="num">${esc(x.kod)}</td><td><span class="pill ${pc[x.tur]}">${esc(x.tur)}</span></td><td class="n num">${x.tur==="Temettü"?"—":LOT(x.lot)}</td><td class="n num">${x.tur==="Temettü"?TL(x.tutar):x.fiyat?PX(x.fiyat):"—"}</td><td class="n num">${x.komisyon?nf2.format(x.komisyon):"—"}</td><td>${esc(x.kurum||"—")}</td></tr>`).join("")}</tbody></table></div>${P.islemler.length>8?`<p class="small muted">İlk 8 işlem gösteriliyor.</p>`:""}`:""}
     ${bos&&!P.kurumlar.length&&!P.hisseler.length&&!P.ayarlar&&!P.izleme.length?`<div class="row"><button class="btn" data-act="ice-kapat-btn">Kapat</button><label class="btn primary" for="xl-in">Başka dosya seç</label></div>`:`<div><h3>Nasıl devam edilsin?</h3>
       ${kayitli&&!bos?`<div style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
         <label class="check" for="ice-ekle"><input type="radio" name="ice-mod" id="ice-ekle" value="ekle" ${S.iceMod==="ekle"?"checked":""}><span><b>Mevcut defterime ekle.</b> Defterinde zaten olan işlemler tekrar eklenmez${tekrar?` (${tekrar} işlem zaten var, atlanacak)`:""}.</span></label>
@@ -1085,15 +1156,16 @@ async function iceUygula(btn){
   // duplicates are matched one-for-one against what the ledger already holds, so two identical trades inside the file both stay
   const varIsl=new Map(); for(const x of d.islemler){ const k=islemImza(x); varIsl.set(k,(varIsl.get(k)||0)+1); } let no=d.islemler.reduce((m,x)=>Math.max(m,+x.no||0),0), eklenen=0, atlanan=0; const t0=Date.now();
   const kullanilanNo=new Set(d.islemler.map(x=>+x.no));
-  [...P.islemler].sort((a,b)=>a.tarih<b.tarih?-1:a.tarih>b.tarih?1:(a.no||0)-(b.no||0)).forEach((x,i)=>{
+  const bugun=today();
+  [...P.islemler].sort((a,b)=>{ const x=siraTarih(a), y=siraTarih(b); return x<y?-1:x>y?1:(a.no||0)-(b.no||0); }).forEach((x,i)=>{
     const k=islemImza(x); if(varIsl.get(k)>0){ varIsl.set(k,varIsl.get(k)-1); atlanan++; return; }
     const y=Object.assign({},x,{id:uid6(),t:t0+i}); if(!y.no||kullanilanNo.has(+y.no)) y.no=++no; else no=Math.max(no,+y.no); kullanilanNo.add(+y.no);
-    if(y.tur!=="Temettü") y.tutar=null; d.islemler.push(y); eklenen++; });
+    if(y.tur!=="Temettü") y.tutar=null; if(!y.tarih){ y.tarih=""; y.girildi=bugun; } d.islemler.push(y); eklenen++; });
   // stocks: saved settings, then every traded code, then the optional watch list
   const yeniKod=[];
   const hisseEkle=h=>{ const j=d.hisseler.findIndex(x=>x.kod===h.kod); if(j>=0){ if(h.tip) Object.assign(d.hisseler[j],Object.fromEntries(Object.entries(h).filter(([,v])=>v!=null&&v!==""))); } else { d.hisseler.push(Object.assign({tip:tahminTip(h.kod),ad:""},h)); yeniKod.push(h); } };
   P.hisseler.forEach(hisseEkle);
-  for(const k of new Set(d.islemler.map(x=>x.kod))) if(!d.hisseler.some(h=>h.kod===k)) hisseEkle({kod:k});
+  for(const k of new Set(d.islemler.map(x=>x.kod))) if(!d.hisseler.some(h=>h.kod===k)) hisseEkle(P.tipler?.[k]?{kod:k,tip:P.tipler[k],...(P.tipler[k]==="Fon"?{vergiSinifi:"diger"}:{})}:{kod:k});
   const izlemeAl=$("#ice-izleme")?$("#ice-izleme").checked:S.iceIzleme;
   if(izlemeAl) P.izleme.forEach(k=>hisseEkle({kod:k}));
   // brokers referenced by transactions but not described in the file
@@ -1119,7 +1191,10 @@ async function boot(){
   db.doc("piyasa/fiyatlar").onSnapshot(s=>{ S.piyasa=s.exists?s.data():{veriler:{}}; S.calc=hesapla(S.defter); arkaPlanRender(); },e=>console.warn(e));
   db.doc("piyasa/gecmis").onSnapshot(s=>{ S.gecmis=s.exists?s.data():{veriler:{}}; if(S.detay) renderDrawer(); },e=>console.warn(e));
   db.doc("piyasa/temettu").onSnapshot(s=>{ S.temettu=s.exists?s.data():null; S.calc=hesapla(S.defter); arkaPlanRender(); },e=>console.warn(e));
-  db.doc("piyasa/durum").onSnapshot(s=>{ S.durum=s.exists?s.data():null; if(S.tab==="rapor") renderMain(); },e=>console.warn(e));
+  db.doc("piyasa/durum").onSnapshot(s=>{ const once=S.durum; S.durum=s.exists?s.data():null;
+    const yeni=Object.entries(S.durum?.kodHata||{}).filter(([k,h])=>h.bulunamadi&&!(once?.kodHata?.[k]?.bulunamadi)&&S.defter.hisseler.some(x=>x.kod===k)).map(([k])=>k);
+    if(once&&yeni.length) toast(yeni.join(", ")+" hiçbir fiyat kaynağında bulunamadı. Kodu kontrol et.",7000);
+    S.calc=hesapla(S.defter); arkaPlanRender(); },e=>console.warn(e));
   if(!S.uid){ render(); return; }
   db.doc("data/users/"+S.uid+"/defter").onSnapshot(s=>{
     if(s.metadata?.hasPendingWrites) return;

@@ -10,7 +10,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const XLSX = require(path.join(ROOT, 'renderer', 'vendor', 'xlsx.full.min.js'));
 const EKRAN = path.join(ROOT, 'ekran');
-const HISSELER = ['THYAO', 'GARAN', 'ASELS', 'SISE', 'BIMAS'];
+const HISSELER = ['THYAO', 'GARAN', 'ASELS', 'SISE', 'BIMAS', 'ECILC'];
 const FONLAR = ['AFT', 'TCD'];
 const satirlar = [];
 const kontroller = [];
@@ -83,6 +83,34 @@ async function bekleKadar(fn, sn) { for (let i = 0; i < sn * 2; i++) { try { if 
   const oneri = await w.evaluate(() => { const e = document.querySelector('#temettu-oneri'); return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; });
   satirlar.push('', `Özet'te onaya sunulan temettüler: ${oneri ? oneri.slice(0, 600) : 'yok (alış tarihlerinden sonra temettü dağıtılmamış olabilir)'}`);
   if (oneri) { await w.locator('#temettu-oneri').scrollIntoViewIfNeeded().catch(() => {}); await w.screenshot({ path: path.join(EKRAN, '6-bulunan-temettuler.png') }); }
+
+  // 4b. a misspelt code is reported as such (not as "no connection")
+  await w.click('[data-tab="poz"]'); await bekle(500);
+  await w.fill('#h-kod', 'ECZLC'); await w.click('#f-hisse button[type=submit]');
+  const yanlis = await bekleKadar(async () => /kod bulunamadı/.test(await w.textContent('#main')), 60);
+  kontrol(yanlis, 'yanlış yazılmış kod (ECZLC) gerçek kaynaklarda "kod bulunamadı" olarak işaretlendi');
+  await w.click('[data-detay="ECZLC"]'); await bekle(500);
+  satirlar.push('', 'Yanlış kod denemesi (ECZLC): ' + ((await w.evaluate(() => (document.querySelector('#overlay .warnlist') || {}).textContent || '')).replace(/\s+/g, ' ').trim() || 'uyarı yok'));
+  await w.click('[data-act="hisse-sil"]'); await bekle(200); await w.click('[data-act="hisse-sil"]'); await bekle(500);
+
+  // 4c. a holdings list without dates (the buyer may not remember them): read, priced right away, P/L = lot × (price − purchase price)
+  const liste = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(liste, XLSX.utils.aoa_to_sheet([['Hisse', 'Adet', 'Maliyet'], ['KCHOL', 10, 150]]), 'Portföyüm');
+  const listeYol = path.join(tmp, 'tarihsiz liste.xlsx'); fs.writeFileSync(listeYol, XLSX.write(liste, { type: 'buffer', bookType: 'xlsx' }));
+  await w.setInputFiles('#xl-in', listeYol); await bekle(1500);
+  kontrol(/1 işlemde tarih yok/.test((await w.textContent('#modal')).replace(/\s+/g, ' ')), 'tarih sütunu olmayan Excel listesi okundu');
+  await w.click('[data-act="ice-uygula"]'); await bekle(1000);
+  const kcFiyat = async () => (((await w.evaluate(async () => (await window.desktop.storeGet('piyasa/fiyatlar')) || {})).veriler || {}).KCHOL || {}).fiyat;
+  const kcGeldi = await bekleKadar(async () => (await kcFiyat()) > 0, 60);
+  kontrol(kcGeldi, 'tarihsiz eklenen kodun (KCHOL) fiyatı düğmeye basmadan geldi');
+  if (kcGeldi) {
+    await w.click('[data-tab="poz"]'); await bekle(800); await w.click('[data-detay="KCHOL"]'); await bekle(600);
+    const fy = await kcFiyat();
+    const kzYazi = await w.evaluate(() => { const s = [...document.querySelectorAll('#overlay .stat')].find(e => /Kâğıt üstü/.test(e.textContent)); return s ? s.querySelector('.v').textContent : ''; });
+    const kz = Number(kzYazi.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.'));
+    satirlar.push('', `Tarihsiz liste: KCHOL 10 lot, alış 150,00, güncel ${fy} → ekrandaki kâğıt üstü K/Z ${kzYazi.trim()} (beklenen ${(10 * (fy - 150)).toFixed(2)})`);
+    kontrol(Math.abs(kz - 10 * (fy - 150)) < 0.01, `kâr/zarar alış fiyatına göre: 10 × (${fy} − 150) = ${(10 * (fy - 150)).toFixed(2)}, ekranda ${kzYazi.trim()}`);
+    await w.keyboard.press('Escape'); await bekle(300);
+  }
 
   // 5. BIST 100 page
   await w.click('[data-tab="bist"]');

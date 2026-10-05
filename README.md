@@ -13,7 +13,8 @@ BIST hisseleri ve TEFAS fonları için kişisel portföy takibi. Windows ve macO
 - Vergi bilgisi: hisse ve fon kazançları, brüt temettüler ve kesilen stopajlar. Ödenecek gelir vergisi tüm yıllık gelire bağlı olduğu için hesaplanmaz.
 - Kayıt kontrolü: eksik alım ve mükerrer kayıt uyarıları.
 - Excel: muhasebe biçimli dışa aktarma; eski Excel takip programının dosyasını, bu uygulamanın Excel'ini ya da kendi işlem tablonuzu önizlemeli içe aktarma.
-- Otomatik fiyat güncelleme: açılışta, istendiğinde ve her sabah belirlenen saatte. Uygulama arka planda çalışabilir.
+- Otomatik fiyat güncelleme: açılışta, istendiğinde, yeni bir kod eklenince (elle, Excel'den ya da BIST 100 sayfasından) hemen ve her sabah belirlenen saatte. Uygulama arka planda çalışabilir.
+- Yanlış yazılmış kod hiçbir kaynakta bulunamazsa açıkça "kod bulunamadı" denir; bağlantı hatasından ayrı tutulur. Türkçe klavyeyle yazılan kodlar (ecİlc → ECILC) kendiliğinden düzeltilir.
 - İsteğe bağlı sabah e-posta raporu (kendi e-posta hesabınız üzerinden).
 
 ## Kurulum
@@ -69,9 +70,11 @@ Rapor, uygulama açıkken (pencere kapalı ve arka planda olsa da) belirlenen sa
 
 ## Eski Excel programından geçiş
 
-**Excel'den yükle** düğmesiyle eski programın `.xlsm` dosyasını seçin. DATA sayfasındaki işlemler, BANKA_ISLEMLERI sayfasındaki para hareketleri ve aracı kurum komisyon tabloları önizlemede gösterilir. Ardından "Mevcut defterime ekle" ya da "Defterimi bu dosyayla değiştir" seçilir. Dosya yalnızca bilgisayarınızda okunur. Programın boş şablonunda DATA sayfası boştur; o durumda önizleme bunu açıkça söyler ve yalnızca aracı kurumlar alınır.
+**Excel'den yükle** düğmesiyle eski programın `.xlsm` dosyasını seçin. DATA sayfasındaki işlemler ve BANKA_ISLEMLERI sayfasındaki aracı kurum komisyon tabloları önizlemede gösterilir (para hareketleri alınmaz; uygulama nakit takibi yapmaz). Ardından "Mevcut defterime ekle" ya da "Defterimi bu dosyayla değiştir" seçilir. Dosya yalnızca bilgisayarınızda okunur. Programın boş şablonunda DATA sayfası boştur; o durumda önizleme bunu açıkça söyler ve yalnızca aracı kurumlar alınır.
 
-Kendi hazırladığınız bir Excel tablosu da yüklenebilir: başlık satırında en az **Hisse** (ya da Kod) ve **Tarih** sütunları olmalı; **İşlem türü** (Alış/Satış/Bedelsiz/Temettü), **Lot** (ya da Adet), **Fiyat** ve **Komisyon** sütunları da okunur. Başlıkların üstünde açıklama satırları, başlıklarda "(TL)" gibi birimler olabilir.
+Kendi hazırladığınız bir Excel tablosu da yüklenebilir: başlık satırında en az **Hisse** (ya da Kod) ve **Lot** (ya da Adet) sütunları olmalı; **İşlem türü** (Alış/Satış/Bedelsiz/Temettü), **Fiyat** (ya da Alış fiyatı / Maliyet), **Tarih** ve **Komisyon** sütunları da okunur. Başlıkların üstünde açıklama satırları, başlıklarda "(TL)" gibi birimler olabilir. Tür sütunu yoksa satırlar alış sayılır (eksi lot satış). Okunamayan satırlar önizlemede satır numarası ve nedeniyle listelenir.
+
+**Tarih zorunlu değildir.** Alış tarihini hatırlamıyorsanız boş bırakın (Excel'de ya da İşlemler formunda). Kâr/zarar ortalama alış fiyatına göre hesaplandığı için sonuç tarihten etkilenmez: (güncel fiyat − ortalama alış fiyatı) × lot. Tarihsiz alışlar en eski, tarihsiz satışlar en yeni işlem sayılır. Tarihsiz kayıtlar için temettüler deftere girildikleri günden itibaren aranır; vergi sayfasında tarihsiz satış ve temettüler "Tarihsiz" yılı altında ayrı gösterilir; tarihsiz fon paylarında stopaj güncel oranla tahmin edilir.
 
 ## Geliştirme
 
@@ -82,7 +85,7 @@ npm start
 
 ### Testler
 
-- `npm run test:birim`: hesaplama motoru (kâr/zarar, bedelsiz, eksik kayıt, temettü bulma, fon stopajı, Türkçe sayı ve Excel okuma), fiyat modülü (kaynak doğrulama, TEFAS, temettü olayları, BIST 100 listesi) ve sabah görevi kararları. Elektron gerekmez.
+- `npm run test:birim`: hesaplama motoru (kâr/zarar, bedelsiz, eksik kayıt, temettü bulma, fon stopajı, Türkçe sayı ve Excel okuma), tarihsiz işlemler, fiyat modülü (kaynak doğrulama, TEFAS, temettü olayları, BIST 100 listesi) ve sabah görevi kararları. Elektron gerekmez.
 - `npm test`: uygulamayı açıp kullanıcı gibi gezinen uçtan uca test (kayıtlı fiyat cevaplarıyla, internetsiz).
 - `npm run test:tutarlilik`: aynı defter için Özet, Pozisyonlar, hisse detayı, Vergi, Excel dosyası ve e-posta raporundaki rakamların elle hesaplanmış değerlerle ve birbirleriyle aynı olduğunu; hiçbir yerde örnek ya da hazır veri kalmadığını denetler.
 - `node tests/canli-uygulama.js`: uygulamanın içinden gerçek internete çıkıp fiyat, temettü ve BIST 100 verisini dener.
