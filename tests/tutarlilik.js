@@ -100,6 +100,7 @@ async function main() {
   kontrol(esit(kp('Toplam sonuç'), BEKLENEN.sonuc), `toplam sonuç ${K['Toplam sonuç']?.[0]} = +25.598,03`);
   kontrol(esit(sayi(K['Dolar karşılığı']?.[0]), Math.round(BEKLENEN.usd * 100) / 100), `dolar karşılığı ${K['Dolar karşılığı']?.[0]} = $4.141,88`);
   // dividends found: ASELS 04-10 (300 lots × 1,00) and THYAO 09-01 (180 × 2,00); THYAO 05-20 is already in the ledger (06-01)
+  await sekme(w, 'temettu');
   const tem = await metin(w, '#temettu-oneri').catch(() => '');
   const oneriNet = async (kod, tarih) => sayi(await w.inputValue(`#temettu-oneri tr:has-text("${tarih}"):has-text("${kod}") input`).catch(() => ''));
   kontrol(esit(await oneriNet('ASELS', '10.04.2026'), 255) && esit(await oneriNet('THYAO', '01.09.2026'), 306) && !/20\.05\.2026/.test(tem), 'bulunan temettüler: ASELS 255,00 ve THYAO 306,00 net; kayıtlı olan önerilmedi');
@@ -170,7 +171,9 @@ async function main() {
   bolum = 'kalıntı';
   const hepsi = await tumMetin(w);
   kontrol(!/Örnek|örnek kayıt|Aracı Kurumum/.test(hepsi), 'hiçbir sekmede örnek veri ya da hazır kurum yok');
-  kontrol(!/[Nn]akit|Reel bakiye|Ana paradan|maliyet yöntemi|FIFO|net maliyet/.test(hepsi.replace(/Kâr\/zarar her zaman[^.]*\./, '')), 'kaldırılan özelliklerden (nakit, maliyet yöntemi) iz yok');
+  kontrol(!/[Nn]akit|Reel bakiye|Ana paradan|net maliyet/.test(hepsi), 'kaldırılan nakit takibinden iz yok');
+  await sekme(w, 'ayar');
+  kontrol(await w.inputValue('#v-yontem') === 'ortalama' && !(await w.isChecked('#v-temdus')), 'varsayılan yöntem ağırlıklı ortalama; temettü maliyetten düşülmüyor');
   await sekme(w, 'ayar');
   kontrol((await w.$$('#main table tbody tr')).length === 1 && /Kurum A/.test(await metin(w, '#main table')), 'yalnızca dosyadaki aracı kurum var');
 

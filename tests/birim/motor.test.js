@@ -291,3 +291,54 @@ test('Excel: aracı kurum dökümüne benzer başlıklar ve "KOD - Şirket adı"
   assert.deepEqual(duz(r.islemler.map(x => [x.kod, x.tur, x.tarih, x.lot, x.fiyat, x.komisyon])), [['THYAO', 'Alış', '2026-03-02', 100, 280.5, 5.61], ['ASELS', 'Satış', '', 40, 140, 2]]);
   assert.equal(r.atlanan, 1, 'şirket adı kod sayılmaz');
 });
+
+/* ---------------- cost method, dividend deduction, step log, code correction ---------------- */
+
+test('maliyet yöntemi: ağırlıklı ortalama ile FIFO yalnız kısmi satışta ayrışır, toplam sonuç aynı kalır', () => {
+  const isl3 = () => [isl('KCHOL', 'Alış', '2026-01-05', 100, 10), isl('KCHOL', 'Alış', '2026-02-05', 100, 20), isl('KCHOL', 'Satış', '2026-03-05', 100, 25)];
+  const ort = hesap(defter(isl3()), { KCHOL: 30 }), fifo = hesap(defter(isl3(), [], { ayarlar: { maliyetYontemi: 'fifo' } }), { KCHOL: 30 });
+  // average 15: sale 100 × 10 = 1 000, left 100 @ 15 → open 1 500
+  yakin(ort.poz.KCHOL.gerceklesen, 1000, 'ortalama gerçekleşen'); yakin(ort.poz.KCHOL.ort, 15, 'ortalama kalan'); yakin(ort.poz.KCHOL.kz, 1500, 'ortalama kâğıt üstü');
+  // FIFO: the 10 TL lots go first: sale 100 × 15 = 1 500, left 100 @ 20 → open 1 000
+  yakin(fifo.poz.KCHOL.gerceklesen, 1500, 'FIFO gerçekleşen'); yakin(fifo.poz.KCHOL.ort, 20, 'FIFO kalan'); yakin(fifo.poz.KCHOL.kz, 1000, 'FIFO kâğıt üstü');
+  yakin(ort.toplam.sonuc, 2500, 'toplam'); yakin(fifo.toplam.sonuc, 2500, 'toplam aynı');
+  assert.equal(fifo.fifo, true); assert.match(M.yontemAdi({ maliyetYontemi: 'fifo' }), /FIFO/);
+});
+
+test("FIFO'da bedelsiz eldeki lotlara bölünme gibi yayılır", () => {
+  const k = [isl('KCHOL', 'Alış', '2026-01-05', 100, 10), isl('KCHOL', 'Alış', '2026-02-05', 100, 20), isl('KCHOL', 'Bedelsiz', '2026-03-01', 100, 0), isl('KCHOL', 'Satış', '2026-04-01', 150, 25)];
+  const fifo = hesap(defter(k, [], { ayarlar: { maliyetYontemi: 'fifo' } }), { KCHOL: 30 }).poz.KCHOL;
+  // ×1,5: lots 150 @ 6,667 and 150 @ 13,333; the sale takes the first: 150 × (25 − 6,667) = 2 750; left 150 @ 13,333
+  yakin(fifo.gerceklesen, 2750, 'FIFO gerçekleşen'); yakin(fifo.ort, 40 / 3, 'FIFO kalan maliyet'); assert.equal(fifo.lot, 150);
+  const ort = hesap(defter(k.map(x => ({ ...x }))), { KCHOL: 30 }).poz.KCHOL;
+  yakin(ort.ort, 10, 'ortalama 3 000 / 300'); yakin(ort.gerceklesen, 150 * 15, 'ortalama gerçekleşen 2 250');
+});
+
+test('temettüyü maliyetten düşme: kâr/zarar temettüyü içerir, toplam sonuçta iki kez sayılmaz', () => {
+  const k = () => [isl('KCHOL', 'Alış', '2026-01-05', 100, 50), isl('KCHOL', 'Temettü', '2026-05-01', 0, 0, 0, { tutar: 200 })];
+  const duz = hesap(defter(k()), { KCHOL: 55 }), dus = hesap(defter(k(), [], { ayarlar: { temettuMaliyettenDus: true } }), { KCHOL: 55 });
+  yakin(duz.poz.KCHOL.kz, 500, 'normal'); yakin(dus.poz.KCHOL.ort, 48, 'maliyet 5 000 − 200 = 4 800'); yakin(dus.poz.KCHOL.kz, 700, 'temettü dahil');
+  yakin(duz.toplam.sonuc, 700, 'toplam 500 + 200'); yakin(dus.toplam.sonuc, 700, 'toplam aynı'); yakin(dus.toplam.temettu, 200, 'temettü yine görünür');
+});
+
+test('hesap dökümü: her kayıttan sonra eldeki lot ve ortalama; yöntemlerin karşılaştırması', () => {
+  const d = defter([isl('KCHOL', 'Alış', '2026-01-05', 100, 10), isl('KCHOL', 'Alış', '', 50, 40, 0, { girildi: bugun }), isl('KCHOL', 'Satış', '2026-03-05', 60, 30)]);
+  const p = hesap(d, { KCHOL: 35 }).poz.KCHOL;
+  // undated buy first: 50 @ 40, then 100 @ 10 → 150 lots, average (2 000 + 1 000) / 150 = 20
+  assert.deepEqual(duz(p.adimlar.map(a => [a.tarih, a.tur, a.elde, Math.round(a.ort * 100) / 100])), [['', 'Alış', 50, 40], ['2026-01-05', 'Alış', 150, 20], ['2026-03-05', 'Satış', 90, 20]]);
+  yakin(p.adimlar[2].kazanc, 600, 'satış 60 × (30 − 20)');
+  // FIFO: the sale of 60 takes the undated 50 @ 40 first, then 10 @ 10, so 90 @ 10 are left
+  const k = M.maliyetKarsilastir(d, 'KCHOL');
+  assert.deepEqual(duz(k.map(([ad, q]) => [ad, Math.round(q.ort * 100) / 100])), [['Ağırlıklı ortalama', 20], ['İlk giren ilk çıkar (FIFO)', 10], ['Ortalama, temettü maliyetten düşülmüş', 20]]);
+});
+
+test('yanlış kodu düzeltme: işlemler doğru koda taşınır, aynısı varsa iki kez eklenmez', () => {
+  const d = defter([isl('ECILS', 'Alış', '2026-01-05', 100, 50), isl('ECILS', 'Alış', '2026-02-05', 20, 55), isl('ECILC', 'Alış', '2026-01-05', 100, 50)],
+    [{ kod: 'ECILS', tip: 'Hisse' }, { kod: 'ECILC', tip: 'Hisse' }], { temettuYoksay: ['ECILS|2026-05-01'], elleFiyat: { ECILS: { fiyat: 60 } } });
+  const r = M.kodDegistir(d, 'ECILS', 'ECILC');
+  assert.deepEqual(duz(r), { tasinan: 1, atlanan: 1 });
+  assert.deepEqual(duz(d.islemler.map(x => [x.kod, x.lot])), [['ECILC', 20], ['ECILC', 100]]);
+  assert.deepEqual(duz(d.hisseler.map(h => h.kod)), ['ECILC']); assert.deepEqual(duz(d.temettuYoksay), ['ECILC|2026-05-01']); assert.equal(d.elleFiyat.ECILC.fiyat, 60);
+  const t = defter([isl('THYOA', 'Alış', '2026-01-05', 10, 300)], [{ kod: 'THYOA', tip: 'Hisse', ad: 'x' }]);
+  M.kodDegistir(t, 'THYOA', 'THYAO'); assert.deepEqual(duz(t.hisseler.map(h => [h.kod, h.ad])), [['THYAO', '']]); assert.equal(t.islemler[0].kod, 'THYAO');
+});

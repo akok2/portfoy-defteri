@@ -79,9 +79,9 @@ async function bekleKadar(fn, sn) { for (let i = 0; i < sn * 2; i++) { try { if 
   satirlar.push('', '### Temettü olayları (son 10 yıl)', '', '| Kod | Temettü sayısı | Son temettü (hisse başı) | Bedelsiz / bölünme |', '|---|---|---|---|',
     ...HISSELER.map(k => { const e = tv[k] || {}; const t = e.temettu || [], b = e.bolunme || []; return `| ${k} | ${t.length} | ${t.length ? t[t.length - 1][0] + ' · ' + t[t.length - 1][1] : '—'} | ${b.length ? b.map(x => x[0] + ' ×' + Math.round(x[1] * 1000) / 1000).join(', ') : '—'} |`; }));
   kontrol(HISSELER.filter(k => (tv[k] && tv[k].temettu || []).length).length >= 3, `temettü olayları alındı (${HISSELER.filter(k => (tv[k] && tv[k].temettu || []).length).length}/${HISSELER.length} hissede)`);
-  await w.click('[data-tab="ozet"]'); await bekle(800);
-  const oneri = await w.evaluate(() => { const e = document.querySelector('#temettu-oneri'); return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; });
-  satirlar.push('', `Özet'te onaya sunulan temettüler: ${oneri ? oneri.slice(0, 600) : 'yok (alış tarihlerinden sonra temettü dağıtılmamış olabilir)'}`);
+  await w.click('[data-tab="temettu"]'); await bekle(800);
+  const oneri = await w.evaluate(() => { const e = document.querySelector('#temettu-oneri [data-temettu-ekle]') && document.querySelector('#temettu-oneri'); return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; });
+  satirlar.push('', `Temettü sekmesinde onaya sunulan temettüler: ${oneri ? oneri.slice(0, 600) : 'yok (alış tarihlerinden sonra temettü dağıtılmamış olabilir)'}`);
   if (oneri) { await w.locator('#temettu-oneri').scrollIntoViewIfNeeded().catch(() => {}); await w.screenshot({ path: path.join(EKRAN, '6-bulunan-temettuler.png') }); }
 
   // 4b. a misspelt code is reported as such (not as "no connection")

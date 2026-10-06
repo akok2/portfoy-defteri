@@ -6,16 +6,17 @@ BIST hisseleri ve TEFAS fonları için kişisel portföy takibi. Windows ve macO
 
 - İşlem defteri: alış, satış, bedelsiz, temettü; aracı kurum, işlem grubu ve not.
 - Komisyon: sabit, oranlı ya da son X günün işlem hacmine göre kademeli; isteğe bağlı %5 BSMV.
-- Kâr/zarar ortalama alış fiyatına göre: kâğıt üstü (fiyat − alış fiyatı) × lot, satışta (satış − alış fiyatı) × lot. Komisyon kâr/zarara katılmaz, ayrıca toplanır; Özet'teki "Toplam sonuç" komisyonu düşer. Bedelsiz paylar sıfır maliyetle eklenir ve ortalamayı düşürür.
+- Kâr/zarar tarihe göre değil alış fiyatına göre: kâğıt üstü (fiyat − alış fiyatı) × lot, satışta (satış − alış fiyatı) × lot. Varsayılan ağırlıklı ortalamadır; aracı kurumunuz öyle gösteriyorsa Ayarlar'dan "ilk giren ilk çıkar (FIFO)" ya da "temettüyü maliyetten düş" seçilebilir. Komisyon kâr/zarara katılmaz, ayrıca toplanır; Özet'teki "Toplam sonuç" komisyonu düşer. Bedelsiz paylar sıfır maliyetle eklenir (FIFO'da eldeki lotlara bölünme gibi yayılır).
+- Hisse detayında "Bu kâr/zarar nasıl hesaplandı?": her kayıttan sonra eldeki lot ve ortalama alış fiyatı, ve aynı kayıtların üç yöntemle maliyeti (kurumunuzla karşılaştırmak için).
 - Pozisyonlar: elimdekiler, satıp kapattıklarım ve izleme listesi ayrı gösterilir. Haftalık, aylık ve yıl içi fiyat değişimi, hedef ve zarar-durdur uyarıları.
-- Temettüler kendiliğinden bulunur: elinizde lot olduğu tarihlerde dağıtılan ve defterde olmayan temettüler Özet'te listelenir, onaylarsanız deftere eklenir (tutar tahminidir, düzeltilebilir).
+- Temettü sekmesi: elinizde lot olduğu tarihlerde dağıtılan ve defterde olmayan temettüler bulunur, onaylarsanız deftere eklenir (tutar tahminidir, düzeltilebilir). Yıl ve hisse filtresi, toplu onay/yoksay, deftere girilmiş temettüler ve toplamları. Özet'te yalnızca kısa bir not görünür.
 - BIST 100 sayfası: endeksteki tüm hisseler fiyat ve günlük değişimle; tek tıkla izleme listesine eklenir.
 - Vergi bilgisi: hisse ve fon kazançları, brüt temettüler ve kesilen stopajlar. Ödenecek gelir vergisi tüm yıllık gelire bağlı olduğu için hesaplanmaz.
 - Kayıt kontrolü: eksik alım ve mükerrer kayıt uyarıları.
 - Excel: muhasebe biçimli dışa aktarma; eski Excel takip programının dosyasını, bu uygulamanın Excel'ini ya da kendi işlem tablonuzu önizlemeli içe aktarma.
 - Otomatik fiyat güncelleme: açılışta, istendiğinde, yeni bir kod eklenince (elle, Excel'den ya da BIST 100 sayfasından) hemen ve her sabah belirlenen saatte. Uygulama arka planda çalışabilir.
-- Yanlış yazılmış kod hiçbir kaynakta bulunamazsa açıkça "kod bulunamadı" denir; bağlantı hatasından ayrı tutulur. Türkçe klavyeyle yazılan kodlar (ecİlc → ECILC) kendiliğinden düzeltilir.
-- İsteğe bağlı sabah e-posta raporu (kendi e-posta hesabınız üzerinden).
+- Yanlış yazılmış kod hiçbir kaynakta bulunamazsa açıkça "kod bulunamadı" denir; bağlantı hatasından ayrı tutulur. Özet'teki uyarıdan "Kodu düzelt" ile doğrusu yazılır (işlemler doğru koda taşınır), izleme listesinden "Kaldır" ile silinir; düzeltilmiş bir Excel eklenirken dosyada olmayan bu kodların kaldırılması önerilir. Türkçe klavyeyle yazılan kodlar (ecİlc → ECILC) kendiliğinden düzeltilir.
+- İsteğe bağlı sabah e-posta raporu (kendi e-posta hesabınız üzerinden). Gönderen hesap için Gmail, Yandex, iCloud ve Yahoo hazır ayarlı; her biri için uygulama şifresinin nasıl alınacağı adım adım yazar. Outlook/Hotmail hesapları uygulamaların şifreyle göndermesine izin vermediği için gönderen olamaz, ama rapor bu adreslere gönderilebilir. Kurumsal ya da başka bir SMTP sunucusu da elle girilebilir.
 
 ## Kurulum
 

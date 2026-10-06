@@ -214,13 +214,22 @@ async function main() {
   if (!/Dolar karşılığı/.test(ozet)) console.log('ÖZET:', ozet.slice(0, 700));
   kontrol(/Dolar karşılığı/.test(ozet), 'dolar karşılığı (TCMB) görünüyor');
   kontrol(/Ödenen komisyon/.test(ozet) && /Toplam sonuç/.test(ozet) && !/Reel bakiye|Ana paradan/.test(ozet), 'özet: komisyon ayrı, toplam sonuç var, nakit kalemleri yok');
-  // dividends found from the price module's events, waiting for confirmation
+  // dividends found from the price module's events: a short pointer on Özet, the list on its own tab
+  kontrol(/2 bulunan temettü onayını bekliyor/.test(await metin(w, '#temettu-ozet').catch(() => '')) && !(await w.$('#main [data-temettu-ekle]')), 'özet sayfasında uzun temettü listesi yok, kısa bir not ve sekmeye bağlantı var');
+  kontrol(/Temettü\s*2/.test(await metin(w, '#tabs')), 'Temettü sekmesinde bekleyen sayısı görünüyor');
+  await w.click('#temettu-ozet [data-tab="temettu"]'); await bekle(300);
   const oneri = await metin(w, '#temettu-oneri').catch(() => '');
   kontrol(/ASELS/.test(oneri) && /10\.04\.2026/.test(oneri) && /400,00 TL/.test(oneri) && /01\.09\.2026/.test(oneri) && !/20\.05\.2026/.test(oneri), 'temettüler bulundu (ASELS 400 lot × 1,00 brüt; bedelsiz geri düzeltildi), deftere girilmiş olan tekrar önerilmiyor');
   kontrol(await w.inputValue('#temettu-oneri tr:has-text("ASELS") input') === '340,00', 'net temettü %15 stopajla önerildi (340,00)');
+  await w.selectOption('#tm-kod', 'THYAO'); await bekle(300);
+  { const f = await metin(w, '#temettu-oneri'); kontrol(/01\.09\.2026/.test(f) && !/ASELS/.test(f) && /Listedeki 1 temettünün/.test(f), 'hisse filtresi yalnız seçilen hisseyi gösteriyor'); }
+  await w.selectOption('#tm-kod', ''); await w.selectOption('#tm-yil', '2026'); await bekle(300);
+  kontrol((await w.$$eval('#tm-yil option', o => o.map(x => x.value))).join(',') === ',2026' && (await w.$$('#temettu-oneri [data-temettu-ekle]')).length === 2, 'yıl filtresinde yalnız temettü olan yıllar var, 2026 seçilince ikisi de görünüyor');
+  await w.selectOption('#tm-yil', ''); await bekle(300);
   await w.click('#temettu-oneri tr:has-text("01.09.2026") [data-temettu-yoksay]'); await bekle(400);
   await w.click('#temettu-oneri tr:has-text("ASELS") [data-temettu-ekle]'); await bekle(500);
-  kontrol(!(await w.$('#temettu-oneri')), 'onaylanan eklendi, yoksayılan bir daha önerilmiyor');
+  kontrol(!(await w.$('#temettu-oneri [data-temettu-ekle]')) && /Deftere girilmiş temettüler\s*2/.test(await metin(w, '#main')) && /1 temettü yoksayıldı/.test(await metin(w, '#main')), 'onaylanan deftere girdi, yoksayılan bir daha önerilmiyor');
+  kontrol(!/Temettü\s*\d/.test(await metin(w, '#tabs')), 'bekleyen kalmayınca sekmedeki sayı kalkıyor');
   await sekme(w, 'vergi');
   console.log('VERGİ:', (await metin(w, '#main')).slice(0, 400));
   const vergi = await metin(w, '#main');
@@ -309,6 +318,15 @@ async function main() {
   /* ---------------- 5. E-mail report ---------------- */
   aktifTest = 'e-posta';
   await sekme(w, 'rapor');
+  { const u = await w.$('#eposta-yardim'); const kutu = u && await u.boundingBox(); const m = u ? (await u.textContent()).replace(/\s+/g, ' ') : '';
+    kontrol(await w.inputValue('#d-saglayici') === 'gmail' && kutu && kutu.height > 80 && /Gmail için normal şifreni yazma/.test(m) && /16 harfli/.test(m) && await w.isVisible('#eposta-yardim a[href*="apppasswords"]'), 'Gmail uygulama şifresi uyarısı belirgin bir kutuda, adımları ve bağlantısıyla tam görünüyor'); }
+  await w.selectOption('#d-saglayici', 'yandex'); await bekle(200);
+  kontrol(await w.inputValue('#d-host') === 'smtp.yandex.com' && await w.inputValue('#d-port') === '465' && /Yandex için normal şifreni yazma/.test(await metin(w, '#eposta-yardim')), 'Yandex seçilince sunucu ayarı ve Yandex adımları geliyor');
+  await w.selectOption('#d-saglayici', 'icloud'); await bekle(200);
+  kontrol(await w.inputValue('#d-host') === 'smtp.mail.me.com' && await w.inputValue('#d-port') === '587' && !(await w.isChecked('#d-secure')) && /Uygulamaya özel parolalar/.test(await metin(w, '#eposta-yardim')), 'iCloud seçilince 587 portu ve Apple adımları geliyor');
+  await w.selectOption('#d-saglayici', 'outlook'); await bekle(200);
+  kontrol(/Outlook ve Hotmail hesaplarından gönderilemiyor/.test(await metin(w, '#eposta-yardim')) && /Raporu yine Outlook/.test(await metin(w, '#eposta-yardim')), 'Outlook seçilince gönderen olamayacağı ve ne yapılacağı söyleniyor');
+  await w.selectOption('#d-saglayici', 'diger'); await bekle(200);
   await w.fill('#d-email', 'alici@example.com'); await w.check('#d-aktif');
   await w.fill('#d-host', '127.0.0.1'); await w.fill('#d-port', '2526'); await w.uncheck('#d-secure');
   await w.fill('#d-user', 'gonderen@example.com'); await w.fill('#d-pass', 'uygulama-sifresi');
@@ -384,7 +402,7 @@ async function main() {
   kontrol(tp.includes('+8.500,00 TL') && tp.includes('+40.700,00 TL') && tp.includes('+2.050,00 TL'), 'tarihsiz alışlarda kâr/zarar alış fiyatına göre: 8.500 + 40.700 + 2.050');
   await sekme(w, 'ozet');
   kontrol(/Kâğıt üstü kâr\/zarar\s*\+51\.250,00 TL/.test(await metin(w, '#main')), 'özet: kâğıt üstü kâr/zarar 51.250,00');
-  kontrol(!(await w.$('#temettu-oneri')), 'tarihsiz alış için geçmiş temettüler önerilmiyor (alındığı gün bilinmiyor)');
+  kontrol(!(await w.$('#temettu-ozet')) && !/Temettü\s*\d/.test(await metin(w, '#tabs')), 'tarihsiz alış için geçmiş temettüler önerilmiyor (alındığı gün bilinmiyor)');
   // a sale typed by hand without a date
   await sekme(w, 'islem');
   kontrol(((await metin(w, '#main')).match(/tarih yok/g) || []).length === 3, 'işlemler listesinde "tarih yok" yazıyor');
@@ -411,6 +429,50 @@ async function main() {
   await w.setInputFiles('#xl-in', indirilen2); await bekle(1200);
   kontrol(/4 işlem zaten var/.test(await metin(w, '#modal')), 'aynı dosya yeniden yüklenince tarihsiz işlemler tekrar sayılmıyor');
   await w.click('[data-act="ice-kapat-btn"]'); await bekle(300);
+
+  /* ---------------- 8. Mistyped codes: remove, correct, clean up on import ---------------- */
+  aktifTest = 'yanlış kod';
+  const kodBul = async kod => { for (let i = 0; i < 30 && !new RegExp(kod + '[^]*?kod bulunamadı').test(await metin(w, '#main')); i++) await bekle(300); return new RegExp(kod + '[^]*?kod bulunamadı').test(await metin(w, '#main')); };
+  await sekme(w, 'poz'); await w.fill('#h-kod', 'XYZW'); await w.click('#f-hisse button[type=submit]'); await bekle(500);
+  kontrol(await kodBul('XYZW'), 'izleme listesine eklenen yanlış kod işaretlendi');
+  await w.click('tr:has-text("XYZW") [data-act="kod-kaldir"]'); await bekle(150); await w.click('tr:has-text("XYZW") [data-act="kod-kaldir"]'); await bekle(500);
+  kontrol(!/XYZW/.test(await metin(w, '#main')), 'izleme listesindeki kod "Kaldır" ile silindi');
+  // a second file with a typo in a code that has trades: correct it from the warning on Özet
+  const yaz = (ad, satirlar) => { const b = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(b, XLSX.utils.aoa_to_sheet(satirlar), 'Liste'); const y = path.join(tmp, ad); fs.writeFileSync(y, XLSX.write(b, { type: 'buffer', bookType: 'xlsx' })); return y; };
+  await w.setInputFiles('#xl-in', yaz('yazim hatasi.xlsx', [['Hisse', 'Adet', 'Maliyet'], ['ASELZ', 100, 50]])); await bekle(1200);
+  await w.click('[data-act="ice-uygula"]'); await bekle(800);
+  kontrol(await kodBul('ASELZ'), 'Excel\'deki yanlış kod "kod bulunamadı" olarak işaretlendi');
+  await sekme(w, 'ozet');
+  await w.click('.warnlist li:has-text("ASELZ") [data-detay="ASELZ"]'); await bekle(400);
+  await w.fill('#kd-yeni', 'asels'); await w.click('#f-kod-duzelt button[type=submit]'); await bekle(700);
+  kontrol(/ASELZ → ASELS olarak düzeltildi/.test(await w.textContent('#toast')), 'yanlış kod doğru koda düzeltildi');
+  await w.keyboard.press('Escape'); await bekle(200); await sekme(w, 'poz');
+  { const t = await metin(w, '#main'); kontrol(!/ASELZ/.test(t) && /ASELS[^]*?Açık\s*1\.100/.test(t), 'işlemleri doğru koda taşındı (ASELS 1.000 + 100 = 1.100 lot)'); }
+  // a watch-list typo the new file does not have is offered for removal when the file is added
+  await w.fill('#h-kod', 'QWER'); await w.click('#f-hisse button[type=submit]'); await bekle(500);
+  kontrol(await kodBul('QWER'), 'ikinci yanlış kod işaretlendi');
+  await w.setInputFiles('#xl-in', yaz('duzeltilmis.xlsx', [['Hisse', 'Adet', 'Maliyet'], ['THYAO', 200, 270]])); await bekle(1200);
+  { const m = await metin(w, '#modal'); kontrol(/bu dosyada olmayan 1 kodu defterimden kaldır/.test(m) && /QWER/.test(m) && await w.isChecked('#ice-kaldir'), 'Excel yüklerken dosyada olmayan yanlış kodun kaldırılması öneriliyor'); }
+  await w.click('[data-act="ice-uygula"]'); await bekle(800);
+  kontrol(/QWER kaldırıldı/.test(await w.textContent('#toast')) && !/QWER/.test(await metin(w, '#main')), 'yanlış kod Excel yüklenirken kaldırıldı');
+
+  /* ---------------- 9. Cost method like the broker's, step-by-step breakdown ---------------- */
+  aktifTest = 'maliyet yöntemi';
+  await sekme(w, 'islem');
+  await w.selectOption('#i-kod', 'THYAO'); await w.fill('#i-tarih', '2026-02-01'); await w.selectOption('#i-tur', 'Alış');
+  await w.fill('#i-lot', '100'); await w.fill('#i-fiyat', '300'); await w.click('#f-islem button[type=submit]'); await bekle(500);
+  // THYAO: undated 200 @ 270 (oldest), 100 @ 300, undated sale 50 @ 320 (newest). Average 84 000 / 300 = 280; FIFO keeps 150 @ 270 + 100 @ 300 = 282
+  await sekme(w, 'poz'); await w.click('[data-detay="THYAO"]'); await bekle(400);
+  { const o = await metin(w, '#overlay'); kontrol(/Ort\. alış fiyatı\s*280,00/.test(o) && /Bu kâr\/zarar nasıl hesaplandı/.test(o), 'ortalama yöntemle 280,00 ve hesap dökümü var');
+    kontrol(/Ağırlıklı ortalama: ortalama alış 280,00/.test(o) && /\(FIFO\): ortalama alış 282,00/.test(o), 'hesap dökümünde yöntemler karşılaştırılıyor (280,00 / 282,00)'); }
+  await w.keyboard.press('Escape'); await bekle(200);
+  await sekme(w, 'ayar'); await w.selectOption('#v-yontem', 'fifo'); await w.click('#f-vergi button[type=submit]'); await bekle(500);
+  await sekme(w, 'poz');
+  kontrol(/ilk giren ilk çıkar \(FIFO\) maliyetine göre/.test(await metin(w, '#main')), 'pozisyonlar başlığı seçilen yöntemi söylüyor');
+  await w.click('[data-detay="THYAO"]'); await bekle(400);
+  kontrol(/Ort\. alış fiyatı\s*282,00/.test(await metin(w, '#overlay')) && /Gerçekleşen\s*\+2\.500,00/.test(await metin(w, '#overlay')), 'FIFO seçilince kalan maliyet 282,00, satış kârı 50 × (320 − 270) = 2.500');
+  await w.keyboard.press('Escape'); await bekle(200);
+  await sekme(w, 'ayar'); await w.selectOption('#v-yontem', 'ortalama'); await w.click('#f-vergi button[type=submit]'); await bekle(400);
   kontrol(errs.length === 0, 'hata yok ' + (errs.length ? JSON.stringify(errs) : ''));
   await kapat(app);
 

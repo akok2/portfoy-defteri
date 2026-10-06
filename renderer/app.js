@@ -111,15 +111,19 @@ function getiri(kod,fiyat,gunGeri,yilBasi){
   let ref=null; for(const [t,c] of g){ if(t<=hedef) ref=+c; else break; }
   return ref>0?fiyat/ref-1:null;
 }
-// Profit/loss is measured against the purchase price: weighted average of buy prices (commission not included;
-// commissions are totalled separately). A bonus issue adds lots at zero cost, which lowers the average.
+// Profit/loss is measured against the purchase price, never the date: by default the weighted average of buy prices
+// (commission not included; commissions are totalled separately). A bonus issue adds lots at zero cost, which lowers the average.
+// Settings: maliyetYontemi "fifo" prices the lots left after a sale first-in-first-out (some brokers show it that way);
+// temettuMaliyettenDus lowers the cost by each dividend received (then the dividend is inside K/Z and not counted twice).
+const yontemAdi=a=>(a?.maliyetYontemi==="fifo"?"ilk giren ilk çıkar (FIFO) maliyetine":"ortalama alış fiyatına")+" göre"+(a?.temettuMaliyettenDus?", temettü maliyetten düşülerek":"");
 function hesapla(d){
   const out={poz:{},satir:{},toplam:{},uyarilar:[],olaylar:[]};
+  const FIFO=d.ayarlar?.maliyetYontemi==="fifo", TEMDUS=!!d.ayarlar?.temettuMaliyettenDus; out.fifo=FIFO; out.temDus=TEMDUS;
   const hs=new Map(d.hisseler.map(h=>[h.kod,h]));
   const list=[...d.islemler].sort(siraKarsilastir);
   const sig=new Map();
   for(const x of list){ if(x.tur==="Temettü") continue; const k=[x.kod,x.tarih,x.tur,x.lot,x.fiyat].join("|"); sig.set(k,(sig.get(k)||0)+1); }
-  const P=kod=>out.poz[kod] ||= {kod,tip:hs.get(kod)?.tip||"Hisse",sinif:hs.get(kod)?.vergiSinifi||"diger",ad:hs.get(kod)?.ad||"",lot:0,maliyet:0,gerceklesen:0,temettu:0,komisyon:0,alinan:0,satilan:0,fifo:[],bozuk:false,mukerrer:false,islemSay:0,satislar:[]};
+  const P=kod=>out.poz[kod] ||= {kod,tip:hs.get(kod)?.tip||"Hisse",sinif:hs.get(kod)?.vergiSinifi||"diger",ad:hs.get(kod)?.ad||"",lot:0,maliyet:0,gerceklesen:0,temettu:0,komisyon:0,alinan:0,satilan:0,fifo:[],bozuk:false,mukerrer:false,islemSay:0,satislar:[],adimlar:[],temettuDusulen:0};
   for(const h of d.hisseler) P(h.kod);
   for(const x of list){
     const p=P(x.kod); p.islemSay++;
@@ -128,24 +132,29 @@ function hesapla(d){
     let note=null;
     const yil=x.tarih?String(x.tarih).slice(0,4):TARIHSIZ;
     if(x.tur==="Alış"&&!(fiy>0)){ note={lvl:"warn",msg:"Alış fiyatı girilmemiş; bu alım maliyetsiz sayılıyor ve kâr/zararı olduğundan yüksek gösterir. Fiyatı gir ya da bedelsizse türünü Bedelsiz yap."}; p.fiyatsizAlis=true; }
-    if(x.tur==="Alış"){ p.lot+=lot; p.maliyet+=lot*fiy; p.alinan+=lot; if(lot>0) p.fifo.push({tarih:x.tarih,lot,birim:fiy}); }
-    else if(x.tur==="Bedelsiz"){ p.lot+=lot; p.alinan+=lot; if(lot>0) p.fifo.push({tarih:x.tarih,lot,birim:0}); }
+    let adimKazanc=null;
+    // fifo lots: birim = purchase price (fund withholding), mb = cost per share used for P/L (lowered by dividends when asked)
+    if(x.tur==="Alış"){ p.lot+=lot; p.maliyet+=lot*fiy; p.alinan+=lot; if(lot>0) p.fifo.push({tarih:x.tarih,lot,birim:fiy,mb:fiy}); }
+    // a bonus issue spreads over the lots already held, like a split: more shares, same total cost
+    else if(x.tur==="Bedelsiz"){ if(lot>0){ if(p.lot>1e-9&&p.fifo.length){ const k=(p.lot+lot)/p.lot; for(const c of p.fifo){ c.lot*=k; c.mb/=k; c.birim/=k; } } else p.fifo.push({tarih:x.tarih,lot,birim:0,mb:0}); } p.lot+=lot; p.alinan+=lot; }
     else if(x.tur==="Satış"){
       p.satilan+=lot;
       if(lot>p.lot+1e-9){ note={lvl:"bad",msg:x.tarih?"Satılan lot ("+LOT(lot)+") o tarihte eldeki lottan ("+LOT(p.lot)+") fazla. Önceki bir alım eksik olabilir.":"Tarihsiz satış en son işlem sayılır; satılan lot ("+LOT(lot)+") yine de eldeki lottan ("+LOT(p.lot)+") fazla. Bir alım eksik olabilir."}; p.bozuk=true; p.maliyet=0; p.lot-=lot; p.fifo=[]; }
       else {
-        const ort=p.lot>0?p.maliyet/p.lot:0; const r=lot*(fiy-ort);
-        p.gerceklesen+=r; p.maliyet-=lot*ort; p.lot-=lot; if(p.lot<1e-9){ p.lot=0; p.maliyet=0; }
-        p.satislar.push({tarih:x.tarih,lot,fiyat:fiy,ort,kazanc:r});
-        // fund withholding is computed first-in-first-out by purchase date, as intermediaries do
-        let kalan=lot, stopaj=0, tahmini=!x.tarih;
-        while(kalan>1e-9 && p.fifo.length){ const c=p.fifo[0]; const m=Math.min(kalan,c.lot); if(p.tip==="Fon"){ stopaj+=m*(fiy-c.birim)*fonOran(p.sinif,c.tarih,x.tarih); if(!c.tarih) tahmini=true; } c.lot-=m; kalan-=m; if(c.lot<=1e-9) p.fifo.shift(); }
+        // purchase lots are used up first-in-first-out: fund withholding always works this way, and so does the cost under FIFO
+        let kalan=lot, stopaj=0, tahmini=!x.tarih, tuketilen=0;
+        while(kalan>1e-9 && p.fifo.length){ const c=p.fifo[0]; const m=Math.min(kalan,c.lot); tuketilen+=m*c.mb; if(p.tip==="Fon"){ stopaj+=m*(fiy-c.birim)*fonOran(p.sinif,c.tarih,x.tarih); if(!c.tarih) tahmini=true; } c.lot-=m; kalan-=m; if(c.lot<=1e-9) p.fifo.shift(); }
+        const satMaliyet=FIFO?tuketilen:lot*(p.lot>0?p.maliyet/p.lot:0), ort=lot>0?satMaliyet/lot:0, r=lot*fiy-satMaliyet;
+        p.gerceklesen+=r; p.maliyet-=satMaliyet; p.lot-=lot; if(p.lot<1e-9){ p.lot=0; p.maliyet=0; }
+        p.satislar.push({tarih:x.tarih,lot,fiyat:fiy,ort,kazanc:r}); adimKazanc=r;
         out.olaylar.push({yil,tarih:x.tarih,kod:x.kod,tip:p.tip,tur:"satis",kazanc:r,stopaj:p.tip==="Fon"?Math.max(0,stopaj):0,tahmini:p.tip==="Fon"&&tahmini});
       }
     }
-    else if(x.tur==="Temettü"){ const net=+x.tutar||0, o=temettuOran(x.tarih), brut=net/(1-o); p.temettu+=net; out.olaylar.push({yil,tarih:x.tarih,kod:x.kod,tip:p.tip,tur:"temettu",net,brut,stopaj:brut-net,oran:o}); }
+    else if(x.tur==="Temettü"){ const net=+x.tutar||0, o=temettuOran(x.tarih), brut=net/(1-o); p.temettu+=net; out.olaylar.push({yil,tarih:x.tarih,kod:x.kod,tip:p.tip,tur:"temettu",net,brut,stopaj:brut-net,oran:o});
+      if(TEMDUS&&p.tip!=="Fon"&&p.lot>1e-9&&net>0){ const hb=net/p.lot; p.maliyet-=net; p.temettuDusulen+=net; for(const c of p.fifo) c.mb-=hb; } }
     if(!note && x.tur!=="Temettü"){ const k=[x.kod,x.tarih,x.tur,x.lot,x.fiyat].join("|"); if(sig.get(k)>1){ note={lvl:"warn",msg:x.tarih?"Aynı gün, aynı lot ve fiyatla ikinci kayıt. Mükerrer olabilir.":"Tarihsiz, aynı lot ve fiyatla ikinci kayıt. Mükerrer olabilir."}; p.mukerrer=true; } }
     if(note) out.satir[x.id]=note;
+    p.adimlar.push({tarih:x.tarih,tur:x.tur,lot,fiyat:fiy,tutar:+x.tutar||0,elde:p.bozuk?null:p.lot,ort:!p.bozuk&&p.lot>1e-9?p.maliyet/p.lot:null,kazanc:adimKazanc});
   }
   let T={deger:0,maliyet:0,kz:0,gerceklesen:0,temettu:0,komisyon:0,gunluk:0,gunlukBaz:0,fiyatsiz:0,tutarsiz:0,acik:0};
   for(const p of Object.values(out.poz)){
@@ -154,7 +163,7 @@ function hesapla(d){
     if(!p.ad && f?.ad) p.ad=f.ad;
     T.temettu+=p.temettu; T.komisyon+=p.komisyon;
     if(p.bozuk){ T.tutarsiz++; p.deger=p.kz=p.kzYuzde=null; continue; }
-    T.temettuTutarli=(T.temettuTutarli||0)+p.temettu; T.komisyonTutarli=(T.komisyonTutarli||0)+p.komisyon;
+    T.temettuTutarli=(T.temettuTutarli||0)+p.temettu; T.komisyonTutarli=(T.komisyonTutarli||0)+p.komisyon; T.temettuDusulen=(T.temettuDusulen||0)+p.temettuDusulen;
     T.gerceklesen+=p.gerceklesen;
     if(p.lot>0){
       T.acik++;
@@ -171,7 +180,8 @@ function hesapla(d){
   T.kzYuzde=T.maliyet>0?T.kz/T.maliyet:null;
   T.gunlukYuzde=T.gunlukBaz>0?T.gunluk/T.gunlukBaz:null;
   // everything this ledger produced: open and realised profit plus dividends, minus all commissions paid
-  T.sonuc=T.kz+T.gerceklesen+(T.temettuTutarli||0)-(T.komisyonTutarli||0);
+  // a dividend already taken off the cost is inside K/Z, so it is not added a second time
+  T.sonuc=T.kz+T.gerceklesen+(T.temettuTutarli||0)-(T.temettuDusulen||0)-(T.komisyonTutarli||0);
   out.toplam=T;
   for(const p of Object.values(out.poz)){
     if(p.bozuk) out.uyarilar.push({lvl:"bad",kod:p.kod,msg:"Satışlar alımlardan fazla. Maliyet ve kâr/zarar hesaplanamıyor, toplamlara katılmadı. İşlemler sekmesinde kırmızı satırları kontrol edin."});
@@ -182,12 +192,29 @@ function hesapla(d){
       if(p.f.dogrulama==="uyusmazlik"||p.f.dogrulama==="supheli") out.uyarilar.push({lvl:"warn",kod:p.kod,msg:(p.f.dogrulama==="supheli"?"Fiyatta olağan dışı bir hareket var":"Fiyat kaynakları birbirini tutmuyor")+(p.f.not?" ("+p.f.not+")":"")+". Aracı kurum uygulamandan kontrol et."});
     }
     if(!p.bozuk && !p.f && (p.lot>0 || kodHatasi(p.kod)?.bulunamadi)){ const h=kodHatasi(p.kod);
-      out.uyarilar.push(h&&h.bulunamadi?{lvl:"bad",kod:p.kod,msg:"Bu kod hiçbir fiyat kaynağında bulunamadı; yanlış yazılmış olabilir. Doğru kodu (örneğin Eczacıbaşı İlaç için ECILC) TradingView ya da aracı kurum uygulamandan kontrol et, bu kodu hisse detayından silip doğrusunu ekle."}
+      out.uyarilar.push(h&&h.bulunamadi?{lvl:"bad",kod:p.kod,eylem:"bulunamadi",islemli:p.islemSay>0,msg:"Bu kod hiçbir fiyat kaynağında bulunamadı; yanlış yazılmış olabilir. Doğru kodu (örneğin Eczacıbaşı İlaç için ECILC) TradingView ya da aracı kurum uygulamandan kontrol et; aşağıdan düzeltebilir"+(p.islemSay>0?" (işlemleri doğru koda taşınır).":" ya da listeden kaldırabilirsin.")}
         :{lvl:"warn",kod:p.kod,msg:h?"Fiyat alınamadı ("+h.tarih+"). Kaynaklar bağlantı hatası verdi; internet bağlantını kontrol edip fiyatları yeniden güncelle.":"Güncel fiyat yok. Fiyatları güncelleyin ya da hisse detayından elle girin."}); }
     if(p.alarm) out.uyarilar.push({lvl:p.alarm.t==="stop"?"bad":"ok",kod:p.kod,msg:p.alarm.msg+"."});
   }
   out.temettuOneri=temettuBul(d,list);
   return out;
+}
+// Moves every record of a mistyped code to the right one. Trades already in the ledger under the right code are not doubled.
+function kodDegistir(d,eski,yeni){
+  const imza=x=>[x.tur,x.tarih,+x.lot||0,+x.fiyat||0,+x.tutar||0].join("|");
+  const var_=new Map(); for(const x of d.islemler) if(x.kod===yeni){ const k=imza(x); var_.set(k,(var_.get(k)||0)+1); }
+  let tasinan=0, atlanan=0;
+  d.islemler=d.islemler.filter(x=>{ if(x.kod!==eski) return true; const k=imza(x); if(var_.get(k)>0){ var_.set(k,var_.get(k)-1); atlanan++; return false; } x.kod=yeni; tasinan++; return true; });
+  const h=d.hisseler.find(x=>x.kod===eski);
+  if(d.hisseler.some(x=>x.kod===yeni)) d.hisseler=d.hisseler.filter(x=>x.kod!==eski); else if(h){ h.kod=yeni; h.ad=""; }
+  if(d.elleFiyat&&d.elleFiyat[eski]){ if(!d.elleFiyat[yeni]) d.elleFiyat[yeni]=d.elleFiyat[eski]; delete d.elleFiyat[eski]; }
+  if(d.temettuYoksay) d.temettuYoksay=d.temettuYoksay.map(k=>k.startsWith(eski+"|")?yeni+k.slice(eski.length):k);
+  return {tasinan,atlanan};
+}
+// The same code's records priced three ways, to compare with what a broker shows.
+function maliyetKarsilastir(d,kod){
+  const alt=a=>hesapla(Object.assign({},d,{islemler:d.islemler.filter(x=>x.kod===kod),ayarlar:Object.assign({},d.ayarlar,a)})).poz[kod]||{};
+  return [["Ağırlıklı ortalama",alt({maliyetYontemi:"ortalama",temettuMaliyettenDus:false})],["İlk giren ilk çıkar (FIFO)",alt({maliyetYontemi:"fifo",temettuMaliyettenDus:false})],["Ortalama, temettü maliyetten düşülmüş",alt({maliyetYontemi:"ortalama",temettuMaliyettenDus:true})]];
 }
 // The price module's last attempt for a code that has no price: {mesaj, bulunamadi, tarih} or null.
 function kodHatasi(kod){ return (S.durum&&S.durum.kodHata&&S.durum.kodHata[kod])||null; }
@@ -254,7 +281,7 @@ async function baslat(ornekle){
 }
 
 /* ---------- render ---------- */
-const TABS=[["ozet","Özet"],["poz","Pozisyonlar"],["islem","İşlemler"],["vergi","Vergi"],["rapor","Günlük rapor"],["ayar","Ayarlar ve gizlilik"]];
+const TABS=[["ozet","Özet"],["poz","Pozisyonlar"],["islem","İşlemler"],["temettu","Temettü"],["vergi","Vergi"],["rapor","Günlük rapor"],["ayar","Ayarlar ve gizlilik"]];
 const EK_GORUNUM={};
 function render(){ if(!S.calc) S.calc=hesapla(S.defter); renderChips(); renderBanner(); renderTabs(); renderMain(); renderDrawer(); }
 // Prices can arrive at any moment (background refresh). Never redraw a form the viewer is filling in: those parts wait for the next redraw.
@@ -295,12 +322,12 @@ function renderBanner(){
   $("#banner").innerHTML=h;
 }
 function renderTabs(){
-  const n={islem:S.defter.islemler.length,poz:Object.values(S.calc.poz).filter(p=>p.lot>0||p.bozuk).length};
+  const n={islem:S.defter.islemler.length,poz:Object.values(S.calc.poz).filter(p=>p.lot>0||p.bozuk).length,temettu:(S.calc.temettuOneri||[]).length||null};
   $("#tabs").innerHTML=TABS.map(([k,l])=>`<button class="tab" role="tab" aria-selected="${S.tab===k}" data-tab="${k}">${l}${n[k]!=null?`<span class="count">${n[k]}</span>`:""}</button>`).join("");
 }
 function renderMain(){
   S.bekleyenMain=false; const m=$("#main");
-  const fn={ozet:vOzet,poz:vPoz,islem:vIslem,vergi:vVergi,rapor:vRapor,ayar:vAyar,...EK_GORUNUM}[S.tab]||vOzet;
+  const fn={ozet:vOzet,poz:vPoz,islem:vIslem,temettu:vTemettu,vergi:vVergi,rapor:vRapor,ayar:vAyar,...EK_GORUNUM}[S.tab]||vOzet;
   m.innerHTML=fn();
 }
 function kpi(label,val,delta,dcls){ return `<div class="kpi"><span class="label">${label}</span><span class="v">${val}</span>${delta!=null?`<span class="d ${dcls||""}">${delta}</span>`:""}</div>`; }
@@ -310,14 +337,14 @@ function vOzet(){
   const acik=P.filter(p=>!p.bozuk&&p.lot>0&&p.deger!=null).sort((a,b)=>b.deger-a.deger);
   let k=`<section class="kpis">`+
     kpi("Portföy değeri",TL(T.deger),T.gunlukYuzde!=null?`Bugün ${TLs(T.gunluk)} (${PCT(T.gunlukYuzde)})`:"Günlük değişim yok",cls(T.gunluk))+
-    kpi("Alış tutarı",TL(T.maliyet),`${T.acik} açık pozisyon · ortalama alış fiyatıyla`)+
+    kpi("Alış tutarı",TL(T.maliyet),`${T.acik} açık pozisyon · ${S.calc.fifo?"FIFO maliyetiyle":"ortalama alış fiyatıyla"}`)+
     kpi("Kâğıt üstü kâr/zarar",`<span class="${cls(T.kz)}">${TLs(T.kz)}</span>`,`${PCT(T.kzYuzde)} · (fiyat − alış fiyatı) × lot`,cls(T.kz))+
     kpi("Gerçekleşen kâr/zarar",`<span class="${cls(T.gerceklesen)}">${TLs(T.gerceklesen)}</span>`,"Satışlardan · (satış − alış fiyatı) × lot")+
-    kpi("Temettü",TL(T.temettu),"Hesaba geçen net tutar")+
+    kpi("Temettü",TL(T.temettu),S.calc.temDus?"Hesaba geçen net · maliyetten düşüldü":"Hesaba geçen net tutar")+
     kpi("Ödenen komisyon",TL(T.komisyon),"Kâr/zarara katılmadı, burada ayrı")+
     kpi("Toplam sonuç",`<span class="${cls(T.sonuc)}">${TLs(T.sonuc)}</span>`,"Kâğıt üstü + gerçekleşen + temettü − komisyon"+(T.tutarsiz?" · kaydı eksik kodlar hariç":""),cls(T.sonuc))+
     (S.piyasa?.doviz?.USD?.satis>0?kpi("Dolar karşılığı","$"+nf2.format(T.deger/S.piyasa.doviz.USD.satis),`USD/TRY ${PX(S.piyasa.doviz.USD.satis)}`):"")+
-    `</section>`+temettuPanel();
+    `</section>`;
   const tot=acik.reduce((a,p)=>a+p.deger,0);
   const alloc = acik.length ? `<div class="alloc" role="img" aria-label="Portföy dağılımı">${acik.map((p,i)=>`<span style="width:${(p.deger/tot*100).toFixed(2)}%;background:${PALETTE[i%PALETTE.length]}" title="${esc(p.kod)}"></span>`).join("")}</div>
     <div class="legend">${acik.map((p,i)=>`<span class="sw" style="background:${PALETTE[i%PALETTE.length]}"></span><button class="linkbtn" data-detay="${esc(p.kod)}" style="justify-self:start">${esc(p.kod)}</button><span class="num">${TL(p.deger)}</span><span class="num muted">${nf2.format(p.deger/tot*100)}%</span>`).join("")}</div>
@@ -329,9 +356,10 @@ function vOzet(){
   return k+`<div class="grid2">
     <section class="panel"><div class="panel-h"><h2>Dağılım</h2><span class="small muted">Güncel piyasa değerine göre</span></div>${alloc}</section>
     <section class="panel"><div class="panel-h"><h2>Dikkat</h2><span class="small muted">${U.length} not</span></div>
-      ${U.length?`<ul class="warnlist">${U.map(u=>`<li class="${u.lvl}"><b>${esc(u.kod)}</b><span>${esc(u.msg)}</span></li>`).join("")}</ul>`:`<ul class="warnlist"><li class="ok"><span>Kayıtlarda tutarsızlık yok, tüm fiyatlar mevcut.</span></li></ul>`}
+      ${U.length?`<ul class="warnlist">${U.map(u=>`<li class="${u.lvl}"><b>${esc(u.kod)}</b><span>${esc(u.msg)}${u.eylem==="bulunamadi"?`<span class="row" style="margin-top:6px"><button class="btn" data-detay="${esc(u.kod)}">Kodu düzelt</button>${u.islemli?"":`<button class="btn ghost" data-act="kod-kaldir" data-kod="${esc(u.kod)}" style="color:var(--loss)">Listeden kaldır</button>`}</span>`:""}</span></li>`).join("")}</ul>`:`<ul class="warnlist"><li class="ok"><span>Kayıtlarda tutarsızlık yok, tüm fiyatlar mevcut.</span></li></ul>`}
     </section></div>
-    <section class="panel"><div class="panel-h"><h2>Bugünün hareketleri</h2><span class="small muted">Bir önceki kapanışa göre</span></div><div class="tbl-wrap" style="border:0">${mv}</div></section>`;
+    <section class="panel"><div class="panel-h"><h2>Bugünün hareketleri</h2><span class="small muted">Bir önceki kapanışa göre</span></div><div class="tbl-wrap" style="border:0">${mv}</div></section>
+    ${(()=>{ const L=S.calc.temettuOneri||[]; return L.length?`<section class="panel" id="temettu-ozet"><div class="row" style="justify-content:space-between"><span><b>${L.length} bulunan temettü onayını bekliyor</b> <span class="muted small">· yaklaşık net ${TL(L.reduce((a,t)=>a+t.net,0))}</span></span><button class="btn" data-tab="temettu">Temettü sekmesinde gör</button></div></section>`:""; })()}`;
 }
 
 function vPoz(){
@@ -347,7 +375,7 @@ function vPoz(){
     <td class="n num ${cls(p.gerceklesen)}">${p.bozuk?"n/a":TLs(p.gerceklesen)}</td><td class="n num">${p.temettu?TL(p.temettu):"—"}</td>
     <td class="n num">${h.hedef?PX(h.hedef):"—"} / ${h.stop?PX(h.stop):"—"}</td></tr>`;}).join("");
   const T=S.calc.toplam;
-  return `<section class="panel"><div class="panel-h"><h2>Elimdeki hisse ve fonlar <span class="muted num" style="font-size:15px">${elde.length}</span></h2><span class="small muted">Kâr/zarar ortalama alış fiyatına göre: (fiyat − alış fiyatı) × lot. Komisyon dahil değildir.</span></div>
+  return `<section class="panel"><div class="panel-h"><h2>Elimdeki hisse ve fonlar <span class="muted num" style="font-size:15px">${elde.length}</span></h2><span class="small muted">Kâr/zarar ${esc(yontemAdi(S.defter.ayarlar))}: (fiyat − alış fiyatı) × lot. Komisyon dahil değildir.</span></div>
   ${elde.length?`<div class="tbl-wrap"><table><thead><tr><th>Kod</th><th>Durum</th><th class="n">Lot</th><th class="n">Ort. alış fiyatı</th><th class="n">Fiyat</th><th class="n">Değer</th><th class="n">K/Z</th><th class="n">K/Z %</th><th class="n">Hafta</th><th class="n">Ay</th><th class="n">Yıl içi</th><th class="n">Gerçekleşen</th><th class="n">Temettü</th><th class="n">Hedef / Stop</th></tr></thead><tbody>${satir(elde)}</tbody>
   ${(()=>{const ok=elde.filter(p=>!p.bozuk&&p.deger!=null); const sd=ok.reduce((x,p)=>x+p.deger,0), sk=ok.reduce((x,p)=>x+p.kz,0), sb=ok.reduce((x,p)=>x+p.maliyet,0), sg=ok.reduce((x,p)=>x+(p.gerceklesen||0),0), st=elde.reduce((x,p)=>x+(p.temettu||0),0); return `<tfoot><tr><td colspan="5">Toplam (kaydı tutarlı olanlar)</td><td class="n num">${TL(sd)}</td><td class="n num ${cls(sk)}">${TLs(sk)}</td><td class="n num ${cls(sb>0?sk/sb:null)}">${PCT(sb>0?sk/sb:null)}</td><td colspan="3"></td><td class="n num ${cls(sg)}">${TLs(sg)}</td><td class="n num">${TL(st)}</td><td></td></tr></tfoot>`;})()}</table></div>
   ${elde.some(p=>p.bozuk)?`<p class="small"><span class="pill bad">Kayıt eksik</span> olanlarda satılan lot, kayıtlı alımlardan fazla. Eksik alımı İşlemler sekmesinden girince değer ve kâr/zarar hesaplanır.</p>`:""}`
@@ -355,7 +383,7 @@ function vPoz(){
   ${kapali.length?`<section class="panel"><div class="panel-h"><h2>Satıp kapattıklarım <span class="muted num" style="font-size:15px">${kapali.length}</span></h2><span class="small muted">Tamamını sattığın hisseler; gerçekleşen kâr/zarar burada kalır</span></div>
   <div class="tbl-wrap"><table><thead><tr><th>Kod</th><th>Durum</th><th class="n">Lot</th><th class="n">Ort. alış fiyatı</th><th class="n">Fiyat</th><th class="n">Değer</th><th class="n">K/Z</th><th class="n">K/Z %</th><th class="n">Hafta</th><th class="n">Ay</th><th class="n">Yıl içi</th><th class="n">Gerçekleşen</th><th class="n">Temettü</th><th class="n">Hedef / Stop</th></tr></thead><tbody>${satir(kapali)}</tbody></table></div></section>`:""}
   <section class="panel"><div class="panel-h"><h2>İzleme listesi <span class="muted num" style="font-size:15px">${izleme.length}</span></h2><span class="row"><span class="small muted">Takip ettiğin ama işlem kaydı olmayan kodlar. Portföy değerine katılmaz.</span><button class="btn" data-act="izleme-ekle">+ Kod ekle</button></span></div>
-  ${izleme.length?`<div class="tbl-wrap"><table><thead><tr><th>Kod</th><th class="n">Fiyat</th><th class="n">Günlük</th><th class="n">Hafta</th><th class="n">Ay</th><th class="n">Yıl içi</th><th class="n">Hedef / Stop</th><th></th></tr></thead><tbody>${izleme.map(p=>{const h=S.defter.hisseler.find(x=>x.kod===p.kod)||{}; const g=p.f&&p.f.onceki?p.f.fiyat/p.f.onceki-1:null; return `<tr><td><button class="linkbtn" data-detay="${esc(p.kod)}">${esc(p.kod)}</button><div class="src">${esc(p.tip)}${p.ad?" · "+esc(p.ad):""}</div></td><td class="n num">${p.f?PX(p.f.fiyat):kodHatasi(p.kod)?.bulunamadi?`<span class="down small">kod bulunamadı</span>`:`<span class="muted">fiyat yok</span>`}</td><td class="n num ${cls(g)}">${PCT(g)}</td><td class="n num ${cls(p.perf?.hafta)}">${PCT(p.perf?.hafta)}</td><td class="n num ${cls(p.perf?.ay)}">${PCT(p.perf?.ay)}</td><td class="n num ${cls(p.perf?.yil)}">${PCT(p.perf?.yil)}</td><td class="n num">${h.hedef?PX(h.hedef):"—"} / ${h.stop?PX(h.stop):"—"}</td><td class="n"><button class="btn ghost" data-alis="${esc(p.kod)}">Alış gir</button></td></tr>`;}).join("")}</tbody></table></div>`:`<p class="small muted">İzleme listen boş.</p>`}</section>
+  ${izleme.length?`<div class="tbl-wrap"><table><thead><tr><th>Kod</th><th class="n">Fiyat</th><th class="n">Günlük</th><th class="n">Hafta</th><th class="n">Ay</th><th class="n">Yıl içi</th><th class="n">Hedef / Stop</th><th></th></tr></thead><tbody>${izleme.map(p=>{const h=S.defter.hisseler.find(x=>x.kod===p.kod)||{}; const g=p.f&&p.f.onceki?p.f.fiyat/p.f.onceki-1:null; return `<tr><td><button class="linkbtn" data-detay="${esc(p.kod)}">${esc(p.kod)}</button><div class="src">${esc(p.tip)}${p.ad?" · "+esc(p.ad):""}</div></td><td class="n num">${p.f?PX(p.f.fiyat):kodHatasi(p.kod)?.bulunamadi?`<span class="down small">kod bulunamadı</span>`:`<span class="muted">fiyat yok</span>`}</td><td class="n num ${cls(g)}">${PCT(g)}</td><td class="n num ${cls(p.perf?.hafta)}">${PCT(p.perf?.hafta)}</td><td class="n num ${cls(p.perf?.ay)}">${PCT(p.perf?.ay)}</td><td class="n num ${cls(p.perf?.yil)}">${PCT(p.perf?.yil)}</td><td class="n num">${h.hedef?PX(h.hedef):"—"} / ${h.stop?PX(h.stop):"—"}</td><td class="n" style="white-space:nowrap"><button class="btn ghost" data-alis="${esc(p.kod)}">Alış gir</button><button class="btn ghost" data-act="kod-kaldir" data-kod="${esc(p.kod)}" style="color:var(--loss)">Kaldır</button></td></tr>`;}).join("")}</tbody></table></div>`:`<p class="small muted">İzleme listen boş.</p>`}</section>
   <section class="panel"><div class="panel-h"><h2>Hisse ve fon ekle</h2><span class="small muted">Takip etmek istediğin kodu ekle; aldıysan sonra alışını gir</span></div>
   <form class="form" id="f-hisse" autocomplete="off">
     <div class="field"><label for="h-kod">Kod</label><input id="h-kod" placeholder="THYAO" maxlength="8" required></div>
@@ -416,12 +444,40 @@ function vIslem(){
 }
 
 // Dividends found automatically, waiting for the viewer's confirmation.
-function temettuPanel(){
-  const L=S.calc.temettuOneri||[]; if(!L.length) return "";
-  return `<section class="panel" id="temettu-oneri"><div class="panel-h"><h2>Bulunan temettüler <span class="muted num" style="font-size:15px">${L.length}</span></h2><span class="small muted">Elinde lot olduğu tarihlerde dağıtılan, defterinde olmayan temettüler. Tutar tahminidir; hesabına geçenle karşılaştır, gerekirse düzelt.</span></div>
-  <form id="f-temettu" autocomplete="off"><div class="tbl-wrap"><table><thead><tr><th>Hak kullanım</th><th>Kod</th><th class="n">Lot</th><th class="n">Hisse başı brüt</th><th class="n">Brüt</th><th class="n">Stopaj</th><th class="n">Hesaba geçen net</th><th></th></tr></thead><tbody>${L.map((t,i)=>`<tr><td class="num">${fmtDate(t.tarih)}</td><td>${esc(t.kod)}</td><td class="n num">${LOT(t.lot)}</td><td class="n num">${PX(t.hisseBasi)}</td><td class="n num">${TL(t.brut)}</td><td class="n num">%${nf0.format(t.oran*100)}</td>
-    <td class="n"><input class="num" id="tm-${i}" inputmode="decimal" value="${nf2.format(t.net)}" style="width:110px;text-align:right;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--accent)" aria-label="${esc(t.kod)} net temettü"></td>
-    <td class="n" style="white-space:nowrap"><button class="btn primary" type="button" data-temettu-ekle="${i}">Deftere ekle</button> <button class="btn ghost" type="button" data-temettu-yoksay="${i}">Yoksay</button></td></tr>`).join("")}</tbody></table></div></form></section>`;
+// Dividends: the ones the price module found (waiting for approval) and the ones already in the ledger, filterable by year and code.
+function vTemettu(){
+  const L=S.calc.temettuOneri||[], K=S.defter.islemler.filter(x=>x.tur==="Temettü");
+  const yilOf=t=>t?String(t).slice(0,4):TARIHSIZ;
+  const yillar=[...new Set([...L.map(t=>yilOf(t.tarih)),...K.map(x=>yilOf(x.tarih))])].filter(y=>y!==TARIHSIZ).sort().reverse(); if(K.some(x=>!x.tarih)) yillar.push(TARIHSIZ);
+  const kodlar=[...new Set([...L.map(t=>t.kod),...K.map(x=>x.kod)])].sort();
+  if(S.tmYil&&!yillar.includes(S.tmYil)) S.tmYil=""; if(S.tmKod&&!kodlar.includes(S.tmKod)) S.tmKod="";
+  const uyar=(t,k)=>(!S.tmYil||yilOf(t)===S.tmYil)&&(!S.tmKod||k===S.tmKod);
+  const Lf=L.map((t,i)=>Object.assign({i},t)).filter(t=>uyar(t.tarih,t.kod)), goster=S.tmHepsi?Lf:Lf.slice(0,12);
+  const Kf=K.filter(x=>uyar(x.tarih,x.kod)).sort((a,b)=>siraKarsilastir(b,a));
+  const brut=x=>(+x.tutar||0)/(1-temettuOran(x.tarih)), kNet=Kf.reduce((a,x)=>a+(+x.tutar||0),0), kBrut=Kf.reduce((a,x)=>a+brut(x),0);
+  const yoksay=(S.defter.temettuYoksay||[]).length;
+  const sec=(id,deg,ops)=>`<select id="${id}" style="min-width:140px">${ops.map(([v,l])=>`<option value="${esc(v)}" ${v===deg?"selected":""}>${esc(l)}</option>`).join("")}</select>`;
+  return `<div class="row" style="justify-content:space-between;align-items:flex-end">
+    <div class="row"><div class="field"><label for="tm-yil">Yıl</label>${sec("tm-yil",S.tmYil||"",[["","Tüm yıllar"],...yillar.map(y=>[y,y])])}</div>
+    <div class="field"><label for="tm-kod">Hisse</label>${sec("tm-kod",S.tmKod||"",[["","Tüm hisseler"],...kodlar.map(k=>[k,k])])}</div></div>
+    <span class="small muted">Temettüler kârına/zararına değil, Özet'teki Toplam sonuç'a ve Vergi sayfasına girer.</span></div>
+  <section class="kpis">
+    ${kpi("Alınan temettü (net)",TL(kNet),`${Kf.length} kayıt · brüt ≈ ${TL(kBrut)}`)}
+    ${kpi("Onay bekleyen",String(Lf.length),Lf.length?`yaklaşık net ${TL(Lf.reduce((a,t)=>a+t.net,0))}`:"bekleyen yok")}
+    ${kpi("Yoksayılan",String(yoksay),yoksay?"bir daha önerilmez":"—")}
+  </section>
+  <section class="panel" id="temettu-oneri"><div class="panel-h"><h2>Onay bekleyen temettüler <span class="muted num" style="font-size:15px">${Lf.length}</span></h2><span class="small muted">Elinde lot olduğu tarihlerde dağıtılan, defterinde olmayan temettüler. Tutar tahminidir; hesabına geçenle karşılaştır, gerekirse düzelt.</span></div>
+  ${Lf.length?`<form id="f-temettu" autocomplete="off"><div class="tbl-wrap"><table><thead><tr><th>Hak kullanım</th><th>Kod</th><th class="n">Lot</th><th class="n">Hisse başı brüt</th><th class="n">Brüt</th><th class="n">Stopaj</th><th class="n">Hesaba geçen net</th><th></th></tr></thead><tbody>${goster.map(t=>`<tr><td class="num">${fmtDate(t.tarih)}</td><td>${esc(t.kod)}</td><td class="n num">${LOT(t.lot)}</td><td class="n num">${PX(t.hisseBasi)}</td><td class="n num">${TL(t.brut)}</td><td class="n num">%${nf0.format(t.oran*100)}</td>
+    <td class="n"><input class="num" id="tm-${t.i}" inputmode="decimal" value="${nf2.format(t.net)}" style="width:110px;text-align:right;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--accent)" aria-label="${esc(t.kod)} net temettü"></td>
+    <td class="n" style="white-space:nowrap"><button class="btn primary" type="button" data-temettu-ekle="${t.i}">Deftere ekle</button> <button class="btn ghost" type="button" data-temettu-yoksay="${t.i}">Yoksay</button></td></tr>`).join("")}</tbody></table></div></form>
+    <div class="row">${Lf.length>goster.length?`<button class="btn" data-act="tm-hepsi-goster">Tümünü göster (${Lf.length})</button>`:""}
+    <button class="btn" data-act="tm-toplu-ekle">Listedeki ${Lf.length} temettünün hepsini deftere ekle</button><button class="btn ghost" data-act="tm-toplu-yoksay">Hepsini yoksay</button>
+    <span class="small muted">Toplu işlem yalnız seçili yıl ve hissedekileri kapsar.</span></div>`
+    :`<p class="small muted">${L.length?"Bu filtrede onay bekleyen temettü yok.":"Onay bekleyen temettü yok. Fiyatlar her güncellendiğinde, elindeki hisselerin dağıttığı temettüler aranır."}</p>`}
+  ${yoksay?`<p class="small muted">${yoksay} temettü yoksayıldı. <button class="linkbtn" data-act="tm-yoksay-geri">Yoksayılanları yeniden göster</button></p>`:""}</section>
+  <section class="panel"><div class="panel-h"><h2>Deftere girilmiş temettüler <span class="muted num" style="font-size:15px">${Kf.length}</span></h2><span class="small muted">Düzeltmek ya da silmek için İşlemler sekmesi</span></div>
+  ${Kf.length?`<div class="tbl-wrap"><table><thead><tr><th>Tarih</th><th>Kod</th><th class="n">Brüt</th><th class="n">Kesilen stopaj</th><th class="n">Hesaba geçen net</th><th>Not</th></tr></thead><tbody>${Kf.map(x=>`<tr><td class="num">${x.tarih?fmtDate(x.tarih):"tarih yok"}</td><td><button class="linkbtn" data-detay="${esc(x.kod)}">${esc(x.kod)}</button></td><td class="n num">${TL(brut(x))}</td><td class="n num">${TL(brut(x)-(+x.tutar||0))} <span class="src">%${nf0.format(temettuOran(x.tarih)*100)}</span></td><td class="n num">${TL(+x.tutar||0)}</td><td class="small muted" style="white-space:normal">${esc(x.not||"")}</td></tr>`).join("")}</tbody>
+  <tfoot><tr><td colspan="2">Toplam</td><td class="n num">${TL(kBrut)}</td><td class="n num">${TL(kBrut-kNet)}</td><td class="n num">${TL(kNet)}</td><td></td></tr></tfoot></table></div>`:`<p class="small muted">Bu filtrede deftere girilmiş temettü yok.</p>`}</section>`;
 }
 
 function vRapor(){ if(DESKTOP) return vRaporDesktop();
@@ -505,7 +561,9 @@ function vAyar(){
   </form></section>
   <section class="panel"><div class="panel-h"><h2>Hesaplama ayarları</h2></div>
   <form class="form" id="f-vergi" autocomplete="off">
-    <div class="field wide"><span class="hint">Kâr/zarar her zaman ortalama alış fiyatına göre hesaplanır: (fiyat − alış fiyatı) × lot. Komisyonlar ayrı toplanır ve Özet'teki "Toplam sonuç"tan düşülür.</span></div>
+    <div class="field wide"><span class="hint">Kâr/zarar tarihe göre değil, alış fiyatına göre hesaplanır: (fiyat − alış fiyatı) × lot. Komisyonlar ayrı toplanır ve Özet'teki "Toplam sonuç"tan düşülür. Aracı kurumunla aynı görünmesi için aşağıdan onun yöntemini seçebilirsin; bir hissenin hesabını adım adım görmek için hisse detayındaki "Bu kâr/zarar nasıl hesaplandı?" bölümüne bak.</span></div>
+    <div class="field"><label for="v-yontem">Satıştan sonra kalan lotların maliyeti</label><select id="v-yontem"><option value="ortalama" ${S.defter.ayarlar?.maliyetYontemi!=="fifo"?"selected":""}>Ağırlıklı ortalama (çoğu aracı kurum)</option><option value="fifo" ${S.defter.ayarlar?.maliyetYontemi==="fifo"?"selected":""}>İlk giren ilk çıkar (FIFO)</option></select><span class="hint">Yalnızca bir kısmını sattığın hisselerde fark eder.</span></div>
+    <label class="check wide" for="v-temdus"><input type="checkbox" id="v-temdus" ${S.defter.ayarlar?.temettuMaliyettenDus?"checked":""}><span>Deftere girilen temettüyü maliyetten düş. Bazı aracı kurumlar maliyeti temettü kadar düşürerek gösterir; bu seçenekte temettü kâr/zararın içinde olur ve Toplam sonuç'ta iki kez sayılmaz.</span></label>
     <div class="field"><label for="v-sinir">Yıllık gelir vergisi beyan sınırı (TL)</label><input id="v-sinir" inputmode="decimal" value="${nf0.format(+(S.defter.ayarlar?.beyanSiniri)||BEYAN_SINIRI_2026)}"><span class="hint">2026 için 400.000 TL. Her yıl Gelir İdaresi'nin açıkladığı tutarla güncelle.</span></div>
     <div class="form-actions"><button class="btn primary" type="submit">Kaydet</button></div>
   </form></section>
@@ -539,6 +597,22 @@ function spark(kod){
     <circle cx="${x(pts.length-1)}" cy="${y(vals[vals.length-1])}" r="3.5" fill="${col}"/></svg>
     <div class="row small muted" style="justify-content:space-between"><span>${fmtDate(pts[0][0])}</span><span>en düşük ${PX(mn)} · en yüksek ${PX(mx)}</span><span>${fmtDate(pts[pts.length-1][0])}</span></div>`;
 }
+// Step-by-step view of how a position's cost and profit came out, plus the same records priced the other ways brokers use.
+function hesapDokumu(kod,p){
+  if(!p.adimlar||!p.adimlar.length) return "";
+  const A=S.defter.ayarlar||{}, f=p.f;
+  const satir=p.adimlar.map(a=>`<tr><td class="num">${a.tarih?fmtDate(a.tarih):"tarih yok"}</td><td>${esc(a.tur)}</td><td class="n num">${a.tur==="Temettü"?"—":LOT(a.lot)}</td><td class="n num">${a.tur==="Temettü"?TL(a.tutar):a.tur==="Bedelsiz"?"—":PX(a.fiyat)}</td><td class="n num">${a.elde==null?"—":LOT(a.elde)}</td><td class="n num">${a.ort==null?"—":PX(a.ort)}</td><td class="n num ${cls(a.kazanc)}">${a.kazanc==null?"":TLs(a.kazanc)}</td></tr>`).join("");
+  const alt=p.lot>0&&!p.bozuk?maliyetKarsilastir(S.defter,kod):[];
+  const bekleyen=(S.calc.temettuOneri||[]).filter(t=>t.kod===kod).length;
+  return `<details class="small" id="hesap-dokumu"><summary><b>Bu kâr/zarar nasıl hesaplandı?</b></summary><div class="prose small" style="margin-top:8px">
+    <p>Yöntem: ${esc(yontemAdi(A))}. Kayıtlar hesaba bu sırayla girdi; "Eldeki" ve "Ort. alış" o kayıttan sonraki durumdur (tarihi olmayan alışlar en başta, tarihi olmayan satışlar en sonda sayılır):</p>
+    <div class="tbl-wrap"><table><thead><tr><th>Tarih</th><th>İşlem</th><th class="n">Lot</th><th class="n">Fiyat</th><th class="n">Eldeki</th><th class="n">Ort. alış</th><th class="n">Gerçekleşen</th></tr></thead><tbody>${satir}</tbody></table></div>
+    ${p.lot>0&&f&&p.ort!=null?`<p class="num">Kâğıt üstü K/Z = ${LOT(p.lot)} lot × (${PX(f.fiyat)} − ${PX(p.ort)}) = <b class="${cls(p.kz)}">${TLs(p.kz)}</b></p>`:""}
+    ${alt.length?`<p><b>Aracı kurumunla karşılaştır.</b> Kurumun gösterdiği maliyet aşağıdakilerden birine eşitse Ayarlar → Hesaplama ayarları'ndan o yöntemi seç; bütün hisseler o yöntemle hesaplanır.</p>
+    <ul>${alt.map(([ad,q])=>`<li>${esc(ad)}: ortalama alış <b class="num">${PX(q.ort)}</b>${q.kz!=null?` · K/Z <span class="num ${cls(q.kz)}">${TLs(q.kz)}</span>`:""}</li>`).join("")}</ul>
+    ${bekleyen?`<p class="muted">Bu hisse için ${bekleyen} bulunan temettü onay bekliyor (Temettü sekmesi). Temettüyü maliyetten düşen yöntem yalnız deftere girilmiş temettüleri kullanır.</p>`:""}`:""}
+  </div></details>`;
+}
 function renderDrawer(){
   S.bekleyenDrawer=false; const o=$("#overlay"); if(!S.detay){ o.innerHTML=""; return; }
   const kod=S.detay; const p=S.calc.poz[kod]; const h=S.defter.hisseler.find(x=>x.kod===kod)||{kod,tip:"Hisse"};
@@ -546,7 +620,8 @@ function renderDrawer(){
   const f=p.f; const tv=h.tip==="Fon"?`https://www.tefas.gov.tr/FonAnaliz.aspx?FonKod=${encodeURIComponent(kod)}`:`https://tr.tradingview.com/symbols/BIST-${encodeURIComponent(kod)}/`;
   o.innerHTML=`<div class="scrim" data-act="kapat"><aside class="drawer" role="dialog" aria-modal="true" aria-label="${esc(kod)} detayı">
   <div class="drawer-h"><div><span class="label">${esc(h.tip)}</span><h2 style="font-size:24px">${esc(kod)}</h2><p class="muted small">${esc(p.ad||h.ad||"")}</p></div><button class="btn" data-act="kapat-btn">Kapat</button></div>
-  ${!f&&kodHatasi(kod)?`<ul class="warnlist"><li class="${kodHatasi(kod).bulunamadi?"bad":"warn"}"><span>${kodHatasi(kod).bulunamadi?`<b>${esc(kod)} kodu hiçbir fiyat kaynağında bulunamadı.</b> Yanlış yazılmış olabilir. Doğrusunu ekleyip bu kodu aşağıdaki düğmeyle silebilirsin.`:"Son denemede fiyat alınamadı."}<br><span class="small muted">${esc(kodHatasi(kod).tarih)} · ${esc(kodHatasi(kod).mesaj)}</span></span></li></ul>`:""}
+  ${!f&&kodHatasi(kod)?`<ul class="warnlist"><li class="${kodHatasi(kod).bulunamadi?"bad":"warn"}"><span>${kodHatasi(kod).bulunamadi?`<b>${esc(kod)} kodu hiçbir fiyat kaynağında bulunamadı.</b> Yanlış yazılmış olabilir. Doğru kodu hemen aşağıya yazıp düzeltebilir ya da en alttaki düğmeyle silebilirsin.`:"Son denemede fiyat alınamadı."}<br><span class="small muted">${esc(kodHatasi(kod).tarih)} · ${esc(kodHatasi(kod).mesaj)}</span></span></li></ul>`:""}
+  ${!f&&kodHatasi(kod)?.bulunamadi?`<form class="form" id="f-kod-duzelt" autocomplete="off"><div class="field"><label for="kd-yeni">Doğru kod</label><input id="kd-yeni" maxlength="12" placeholder="örn. ECILC"><span class="hint">${p.islemSay?`${p.islemSay} işlem doğru koda taşınır; doğru kodda aynısı zaten varsa tekrar eklenmez.`:"Kod listede doğrusuyla değiştirilir."}</span></div><div class="form-actions"><button class="btn primary" type="submit">Kodu düzelt</button><span class="err-msg" id="kd-err"></span></div></form>`:""}
   <div><div class="bigprice">${f?PX(f.fiyat)+" TL":"Fiyat yok"}</div>${f?`<div class="row" style="margin-block:4px">${kaliteHtml(f)}</div><p class="small muted">${esc(f.kaynak)} · ${esc(String(f.tarih||""))}${f.onceki?` · önceki kapanış ${PX(f.onceki)} <span class="${cls(f.fiyat-f.onceki)}">(${PCT(f.fiyat/f.onceki-1)})</span>`:""}</p>`:""}
   <p class="small row"><a href="${tv}" target="_blank" rel="noopener noreferrer">${h.tip==="Fon"?"TEFAS'ta fon detayı":"TradingView grafiği"} ↗</a>${h.tip!=="Fon"?`<a href="https://www.kap.org.tr/tr/bist-sirketler" target="_blank" rel="noopener noreferrer">KAP bildirimleri ↗</a>`:""}</p>${p.perf?`<p class="small num">Haftalık ${PCT(p.perf.hafta)} · Aylık ${PCT(p.perf.ay)} · Yıl içi ${PCT(p.perf.yil)}</p>`:""}</div>
   ${spark(kod)}
@@ -558,8 +633,9 @@ function renderDrawer(){
     <div class="stat"><span class="label">Kâğıt üstü K/Z</span><span class="v ${cls(p.kz)}">${TLs(p.kz)}</span><span class="small ${cls(p.kzYuzde)}">${PCT(p.kzYuzde)}</span></div>
     <div class="stat"><span class="label">Gerçekleşen</span><span class="v ${cls(p.gerceklesen)}">${TLs(p.gerceklesen)}</span></div>
     <div class="stat"><span class="label">Temettü</span><span class="v">${TL(p.temettu)}</span></div>
-    <div class="stat"><span class="label">Başabaş fiyatı</span><span class="v">${p.lot>0?PX((p.maliyet+p.komisyon-p.gerceklesen-p.temettu)/p.lot):"—"}</span><span class="small muted">komisyon, gerçekleşen kâr ve temettü dahil</span></div>
+    <div class="stat"><span class="label">Başabaş fiyatı</span><span class="v">${p.lot>0?PX((p.maliyet+p.komisyon-p.gerceklesen-(p.temettu-(p.temettuDusulen||0)))/p.lot):"—"}</span><span class="small muted">komisyon, gerçekleşen kâr ve temettü dahil</span></div>
   </div>
+  ${hesapDokumu(kod,p)}
   ${p.satislar.length?`<div class="tbl-wrap"><table><thead><tr><th>Satış tarihi</th><th class="n">Lot</th><th class="n">Satış fiyatı</th><th class="n">Ort. alış fiyatı</th><th class="n">Kâr/zarar</th></tr></thead><tbody>${p.satislar.map(x=>`<tr><td class="num">${x.tarih?fmtDate(x.tarih):"tarih yok"}</td><td class="n num">${LOT(x.lot)}</td><td class="n num">${PX(x.fiyat)}</td><td class="n num">${PX(x.ort)}</td><td class="n num ${cls(x.kazanc)}">${TLs(x.kazanc)}</td></tr>`).join("")}</tbody></table></div>`:""}
   <section class="panel"><h3>Satsam ne olur?</h3>
     <form class="form" id="f-sim" autocomplete="off"><div class="field"><label for="s-lot">Lot</label><input id="s-lot" inputmode="decimal" value="${p.lot>0?p.lot:""}"></div><div class="field"><label for="s-fiyat">Satış fiyatı</label><input id="s-fiyat" inputmode="decimal" value="${f?String(f.fiyat).replace(".",","):""}"></div><div class="field"><label for="s-kurum">Kurum</label><select id="s-kurum">${kurumOpts(S.defter.kurumlar[0]?.ad)}</select></div></form>
@@ -604,6 +680,8 @@ document.addEventListener("click", async ev=>{
   if(a==="bos"){ baslat(false); return; }
   if(a==="ornekle"){ baslat(true); return; }
   if(a==="iptal"){ S.edit=null; renderMain(); syncIslemForm(); return; }
+  if(a==="kod-kaldir"){ if(!guard()) return; const k=t.dataset.kod; if(!arm("kk"+k,t,"Emin misin?")) return;
+    S.defter.hisseler=S.defter.hisseler.filter(h=>h.kod!==k); S.defter.islemler=S.defter.islemler.filter(x=>x.kod!==k); if(S.defter.elleFiyat) delete S.defter.elleFiyat[k]; if(S.detay===k) S.detay=null; commit(k+" listeden kaldırıldı"); return; }
   if(a==="hisse-sil"){ if(!guard()) return; if(!arm("h"+S.detay,t,"Silmek için tekrar tıkla")) return; const k=S.detay; S.defter.hisseler=S.defter.hisseler.filter(h=>h.kod!==k); S.defter.islemler=S.defter.islemler.filter(x=>x.kod!==k); delete S.defter.elleFiyat[k]; S.detay=null; commit(k+" silindi"); return; }
   if(a==="rapor-kapat"){ if(!arm("rk",t,"Kapatmak için tekrar tıkla")) return; try{ await S.db.doc("rapor/"+S.uid).delete(); S.rapor=null; render(); toast("Rapor kapatıldı, paylaşılan özet silindi"); }catch(e){ toast("Kapatılamadı, tekrar dene."); } return; }
   if(a==="hepsini-sil"){ if(!guard()) return; if(!arm("all",t,"Kalıcı silmek için tekrar tıkla")) return; try{ await S.db.doc("data/users/"+S.uid+"/defter").delete(); if(S.rapor) await S.db.doc("rapor/"+S.uid).delete(); S.defter=clone(ORNEK); S.demo=true; S.rapor=null; S.calc=hesapla(S.defter); render(); toast("Tüm verin silindi"); }catch(e){ toast("Silinemedi, tekrar dene."); } return; }
@@ -619,10 +697,10 @@ document.addEventListener("input",ev=>{
   const id=ev.target.id;
   if(id==="i-filtre"){ S.filtre=ev.target.value; const pos=ev.target.selectionStart; renderMain(); syncIslemForm(); const el=$("#i-filtre"); el.focus(); try{el.setSelectionRange(pos,pos);}catch(e){} return; }
   if(["i-lot","i-fiyat","i-kurum"].includes(id)) komOner();
-  if(id==="h-kod"){ const v=kodNorm(ev.target.value); if(v!==ev.target.value) ev.target.value=v; }
+  if(id==="h-kod"||id==="kd-yeni"){ const v=kodNorm(ev.target.value); if(v!==ev.target.value) ev.target.value=v; }
   if(["s-lot","s-fiyat","s-kurum"].includes(id)) simUpdate();
 });
-document.addEventListener("change",ev=>{ if(ev.target.id==="h-tip"){ const f=document.querySelector('[data-for="sinif"]'); if(f) f.hidden=ev.target.value!=="Fon"; } if(ev.target.id==="v-yil"){ S.vYil=ev.target.value; renderMain(); } if(ev.target.id==="i-tarih") komOner(); if(ev.target.id==="k-tip"){ const f=document.querySelector('[data-for="kademe"]'); if(f) f.hidden=ev.target.value!=="kademeli"; } if(ev.target.id==="i-tur") syncIslemForm(); if(ev.target.id==="i-kurum"||ev.target.id==="s-kurum"){ komOner(); simUpdate(); } if(ev.target.id==="xl-in") dosyaSec(ev.target.files?.[0]); if(ev.target.name==="ice-mod"){ S.iceMod=ev.target.value; renderModal(); } if(ev.target.id==="ice-izleme") S.iceIzleme=ev.target.checked; });
+document.addEventListener("change",ev=>{ if(ev.target.id==="h-tip"){ const f=document.querySelector('[data-for="sinif"]'); if(f) f.hidden=ev.target.value!=="Fon"; } if(ev.target.id==="v-yil"){ S.vYil=ev.target.value; renderMain(); } if(ev.target.id==="tm-yil"||ev.target.id==="tm-kod"){ S[ev.target.id==="tm-yil"?"tmYil":"tmKod"]=ev.target.value; S.tmHepsi=false; renderMain(); } if(ev.target.id==="i-tarih") komOner(); if(ev.target.id==="k-tip"){ const f=document.querySelector('[data-for="kademe"]'); if(f) f.hidden=ev.target.value!=="kademeli"; } if(ev.target.id==="i-tur") syncIslemForm(); if(ev.target.id==="i-kurum"||ev.target.id==="s-kurum"){ komOner(); simUpdate(); } if(ev.target.id==="xl-in") dosyaSec(ev.target.files?.[0]); if(ev.target.name==="ice-mod"){ S.iceMod=ev.target.value; renderModal(); } if(ev.target.id==="ice-izleme") S.iceIzleme=ev.target.checked; if(ev.target.id==="ice-kaldir") S.iceKaldir=ev.target.checked; });
 let komElle=false;
 function syncIslemForm(){
   const tur=$("#i-tur")?.value; if(!tur) return;
@@ -638,6 +716,16 @@ function komOner(){
   const kk=S.defter.kurumlar.find(x=>x.ad===$("#i-kurum").value); const ko=kk&&kk.tip==="kademeli"&&tut>0?kurumOrani(kk,tut,$("#i-tarih").value,S.edit):null;
   if(hint) hint.textContent=isFinite(tut)&&tut>0?`Tutar ${TL(tut)} · önerilen ${TL(v)}`+(ko?` · son ${kk.gun} gün hacmi ${TL(ko.hacim)}, oran %${nf3.format(ko.oran)}`:""):"";
 }
+// Approve or ignore every dividend the filters show, in one go (two clicks, like deleting).
+function temettuToplu(t,ekle){
+  if(!guard()) return; const L=S.calc.temettuOneri||[], yilOf=x=>x?String(x).slice(0,4):TARIHSIZ;
+  const sec=L.map((o,i)=>Object.assign({i},o)).filter(o=>(!S.tmYil||yilOf(o.tarih)===S.tmYil)&&(!S.tmKod||o.kod===S.tmKod)); if(!sec.length) return;
+  if(!arm("tm-toplu"+ekle,t,ekle?`${sec.length} temettü eklensin mi? Tekrar tıkla`:`${sec.length} temettü yoksayılsın mı? Tekrar tıkla`)) return;
+  if(ekle){ let no=sonrakiNo(); const t0=Date.now(); sec.forEach((o,j)=>{ const v=parseNum($("#tm-"+o.i)?.value), net=v>0?v:o.net;
+      S.defter.islemler.push({id:uid6(),no:no++,kod:o.kod,tarih:o.tarih,tur:"Temettü",lot:0,fiyat:0,komisyon:0,tutar:Math.round(net*100)/100,kurum:o.kurum,grup:"",not:`Otomatik bulundu: ${LOT(o.lot)} lot × ${PX(o.hisseBasi)} TL brüt`,t:t0+j}); });
+    commit(sec.length+" temettü deftere eklendi"); }
+  else { (S.defter.temettuYoksay ||= []).push(...sec.map(o=>o.kod+"|"+o.tarih)); commit(sec.length+" temettü yoksayıldı"); }
+}
 async function temettuEylem(t){
   const i=t.dataset.temettuEkle??t.dataset.temettuYoksay; const L=S.calc.temettuOneri||[]; const o=L[+i]; if(!o) return;
   if(!guard()) return;
@@ -647,6 +735,10 @@ async function temettuEylem(t){
   commit(o.kod+" temettüsü deftere eklendi");
 }
 document.addEventListener("click",ev=>{ const t=ev.target.closest("[data-temettu-ekle],[data-temettu-yoksay]"); if(t){ temettuEylem(t); }
+  const tm=ev.target.closest('[data-act^="tm-"]'); if(tm){ const a=tm.dataset.act;
+    if(a==="tm-hepsi-goster"){ S.tmHepsi=true; renderMain(); }
+    if(a==="tm-toplu-ekle") temettuToplu(tm,true); if(a==="tm-toplu-yoksay") temettuToplu(tm,false);
+    if(a==="tm-yoksay-geri"&&guard()&&arm("tm-geri",tm,"Hepsi yeniden önerilsin mi? Tekrar tıkla")){ S.defter.temettuYoksay=[]; commit("Yoksayılan temettüler yeniden önerilecek"); } }
   const z=ev.target.closest('[data-act="izleme-ekle"]'); if(z){ const k=$("#h-kod"); if(k){ k.scrollIntoView({block:"center",behavior:"smooth"}); k.focus(); } } });
 document.addEventListener("submit",async ev=>{
   ev.preventDefault(); const id=ev.target.id;
@@ -695,7 +787,17 @@ document.addEventListener("submit",async ev=>{
   }
   if(id==="f-vergi"){
     const v=parseNum($("#v-sinir").value); if(!(v>0)) return toast("Geçerli bir tutar gir.");
-    S.defter.ayarlar ||= {}; S.defter.ayarlar.beyanSiniri=v; delete S.defter.ayarlar.maliyetYontemi; commit("Ayarlar kaydedildi"); return;
+    S.defter.ayarlar ||= {}; S.defter.ayarlar.beyanSiniri=v;
+    S.defter.ayarlar.maliyetYontemi=$("#v-yontem")?.value==="fifo"?"fifo":"ortalama"; S.defter.ayarlar.temettuMaliyettenDus=!!$("#v-temdus")?.checked;
+    commit("Ayarlar kaydedildi"); return;
+  }
+  if(id==="f-kod-duzelt"){
+    if(!guard()) return; const eski=S.detay, yeni=kodNorm($("#kd-yeni").value), err=$("#kd-err");
+    if(!KOD_RE.test(yeni)||!/[A-Z]/.test(yeni)) return err.textContent="Kod 2–8 harf ya da rakam olmalı (örn. ECILC).";
+    if(yeni===eski) return err.textContent="Bu zaten aynı kod.";
+    const tip=(S.defter.hisseler.find(x=>x.kod===eski)||{}).tip||"Hisse";
+    const r=kodDegistir(S.defter,eski,yeni); S.detay=yeni; ensureSembol(yeni,tip);
+    commit(`${eski} → ${yeni} olarak düzeltildi${r.atlanan?` · ${r.atlanan} işlem ${yeni}'de zaten vardı`:""}`); if(typeof kodEklendi==="function") kodEklendi(yeni); return;
   }
   if(id==="f-detay"){
     const k=S.detay; const h=S.defter.hisseler.find(x=>x.kod===k); if(!h) return;
@@ -758,7 +860,7 @@ async function xlsxDisa(){
   add("Ayarlar",[["PORTFOY_DEFTERI_AYARLAR","Bu sayfa Excel'i geri yüklediğinde hisse listesi, hedefler ve komisyon tabloları da geri gelsin diye vardır."],[],["HISSELER"],["KOD","TUR","AD","HEDEF","STOP","VERGI_SINIFI"],
     ...S.defter.hisseler.map(h=>[h.kod,h.tip||"Hisse",h.ad||"",h.hedef||null,h.stop||null,h.vergiSinifi||""]),[],["KURUMLAR"],["AD","TIP","DEGER","MIN","BSMV","GUN","KADEMELER"],
     ...S.defter.kurumlar.map(k=>[k.ad,k.tip,k.tip==="kademeli"?null:+k.deger,+k.min||0,k.bsmv?1:0,k.gun||null,k.tip==="kademeli"?JSON.stringify(k.kademeler||[]):""]),[],["AYARLAR"],
-    ["BEYAN_SINIRI",+(S.defter.ayarlar?.beyanSiniri)||BEYAN_SINIRI_2026]],[26,16,30,10,10,14,60]);
+    ["BEYAN_SINIRI",+(S.defter.ayarlar?.beyanSiniri)||BEYAN_SINIRI_2026],["MALIYET_YONTEMI",S.defter.ayarlar?.maliyetYontemi==="fifo"?"fifo":"ortalama"],["TEMETTU_MALIYETTEN_DUS",S.defter.ayarlar?.temettuMaliyettenDus?1:0]],[26,16,30,10,10,14,60]);
   const buf=X.write(wb,{bookType:"xlsx",type:"array",cellDates:true});
   try{ await S.dl.save({filename:"portfoy-defteri-"+today()+".xlsx",data:new Blob([buf])}); msg.textContent=""; }
   catch(e){ if(e?.code!=="declined"){ msg.className="small err-msg"; msg.textContent="İndirilemedi ("+(e?.code||"hata")+")."; } }
@@ -871,7 +973,7 @@ function ayarOku(rows){
     const a=normH(r[0]);
     if(["HISSELER","KURUMLAR","AYARLAR"].includes(a)){ bolum=a; H=null; continue; }
     if(!bolum||r.every(c=>metin(c)==="")) continue;
-    if(bolum==="AYARLAR"){ if(a==="BEYAN_SINIRI"&&parseNum(r[1])>0) out.ayarlar.beyanSiniri=parseNum(r[1]); if(false&&a==="MALIYET_YONTEMI"&&["ortalama","fifo","net"].includes(metin(r[1]))) out.ayarlar.maliyetYontemi=metin(r[1]); continue; }
+    if(bolum==="AYARLAR"){ if(a==="BEYAN_SINIRI"&&parseNum(r[1])>0) out.ayarlar.beyanSiniri=parseNum(r[1]); if(a==="MALIYET_YONTEMI"&&["ortalama","fifo"].includes(metin(r[1]))) out.ayarlar.maliyetYontemi=metin(r[1]); if(a==="TEMETTU_MALIYETTEN_DUS") out.ayarlar.temettuMaliyettenDus=/^(1|true|evet)$/i.test(metin(r[1])); continue; }
     if(!H){ H=r.map(normH); continue; }
     const g=k=>r[H.indexOf(k)];
     if(bolum==="HISSELER"){ const kod=kodNorm(metin(g("KOD"))); if(!KOD_RE.test(kod)) continue;
@@ -922,10 +1024,15 @@ async function dosyaSec(file){
   const inp=$("#xl-in"); if(inp) inp.value="";
   if(!file) return;
   if(S.readOnly){ toast("Bu sayfada düzenleme yetkin yok."); return; }
-  try{ S.ice=await dosyaOku(file); S.iceMod=(!S.demo&&(S.defter.islemler.length||S.defter.hisseler.length))?"ekle":"degistir"; S.iceIzleme=S.ice.islemler.length>0; renderModal(); }
+  try{ S.ice=await dosyaOku(file); S.iceKaldir=true; S.iceMod=(!S.demo&&(S.defter.islemler.length||S.defter.hisseler.length))?"ekle":"degistir"; S.iceIzleme=S.ice.islemler.length>0; renderModal(); }
   catch(e){ S.ice={hata:e.message,dosya:file.name}; renderModal(); }
 }
 const islemImza=x=>[x.kod,x.tarih,x.tur,+x.lot||0,+x.fiyat||0,+x.tutar||0].join("|");
+// Adding a corrected file: codes in the ledger that no price source knows (typos) and that the file no longer has.
+function kaldirilacakKodlar(P){
+  if(S.demo||S.iceMod!=="ekle"||!S.defter.hisseler.length) return [];
+  return S.defter.hisseler.map(h=>h.kod).filter(k=>kodHatasi(k)?.bulunamadi&&!P.islemler.some(x=>x.kod===k)&&!(P.hisseler||[]).some(x=>x.kod===k)&&!(P.izleme||[]).includes(k));
+}
 function renderModal(){
   const m=$("#modal"); const P=S.ice; if(!P){ m.innerHTML=""; return; }
   if(P.hata){ m.innerHTML=`<div class="scrim center" data-act="ice-kapat"><div class="modal" role="dialog" aria-modal="true" aria-label="Excel yükleme"><h2>Dosya okunamadı</h2><p class="small muted">${esc(P.dosya)}</p><p class="err-msg">${esc(P.hata)}</p><div class="row"><button class="btn" data-act="ice-kapat-btn">Kapat</button><label class="btn primary" for="xl-in">Başka dosya seç</label></div></div></div>`; return; }
@@ -951,6 +1058,8 @@ function renderModal(){
       ${P.atlanan?`<li class="down">${P.atlanan} satır okunamadı ve alınmayacak: ${(P.atlananSatir||[]).map(a=>"satır "+a.satir+" ("+esc(a.neden)+")").join(", ")}${P.atlanan>(P.atlananSatir||[]).length?"…":""}</li>`:""}
     </ul></div>
     ${!P.islemler.length?`<div class="banner err"><p><b>Bu dosyada alış/satış kaydı yok, bu yüzden yükleyince hisse görünmez.</b> ${/Eski Excel/.test(P.kaynak)?"Eski programda işlemler DATA sayfasında tutulur; bu dosyanın DATA sayfası boş (programın boş şablonu olabilir).":esc(BASLIK_ACIKLAMA)}</p></div>`:""}
+    ${(()=>{ const K=kaldirilacakKodlar(P); if(!K.length) return ""; const n=S.defter.islemler.filter(x=>K.includes(x.kod)).length;
+      return `<label class="check" for="ice-kaldir"><input type="checkbox" id="ice-kaldir" ${S.iceKaldir!==false?"checked":""}><span>Fiyatı hiçbir kaynakta bulunamayan ve bu dosyada olmayan ${K.length} kodu defterimden kaldır <span class="muted small">(${esc(K.join(", "))}${n?` · ${n} işlemiyle birlikte`:""})</span></span></label>`; })()}
     ${P.izleme.length?`<label class="check" for="ice-izleme"><input type="checkbox" id="ice-izleme" ${S.iceIzleme?"checked":""}><span>İşlemi olmayan ${P.izleme.length} kodu izleme listesine ekle <span class="muted small">(${esc(P.izleme.slice(0,10).join(", "))}${P.izleme.length>10?"…":""})</span></span></label>`:""}
     ${ornek.length?`<div class="tbl-wrap"><table><thead><tr><th>Tarih</th><th>Kod</th><th>İşlem</th><th class="n">Lot</th><th class="n">Fiyat</th><th class="n">Komisyon</th><th>Kurum</th></tr></thead><tbody>${ornek.map(x=>`<tr><td class="num">${x.tarih?fmtDate(x.tarih):`<span class="muted">tarih yok</span>`}</td><td class="num">${esc(x.kod)}</td><td><span class="pill ${pc[x.tur]}">${esc(x.tur)}</span></td><td class="n num">${x.tur==="Temettü"?"—":LOT(x.lot)}</td><td class="n num">${x.tur==="Temettü"?TL(x.tutar):x.fiyat?PX(x.fiyat):"—"}</td><td class="n num">${x.komisyon?nf2.format(x.komisyon):"—"}</td><td>${esc(x.kurum||"—")}</td></tr>`).join("")}</tbody></table></div>${P.islemler.length>8?`<p class="small muted">İlk 8 işlem gösteriliyor.</p>`:""}`:""}
     ${bos&&!P.kurumlar.length&&!P.hisseler.length&&!P.ayarlar&&!P.izleme.length?`<div class="row"><button class="btn" data-act="ice-kapat-btn">Kapat</button><label class="btn primary" for="xl-in">Başka dosya seç</label></div>`:`<div><h3>Nasıl devam edilsin?</h3>
@@ -970,7 +1079,9 @@ async function iceUygula(btn){
   const kayitli=mevcut&&(mevcut.islemler.length||mevcut.hisseler.length);
   const mod=kayitli?S.iceMod:"degistir";
   if(mod==="degistir"&&kayitli&&!arm("ice-degistir",btn,"Silinip değiştirilsin mi? Tekrar tıkla")) return;
+  const kaldir=mod==="ekle"&&($("#ice-kaldir")?$("#ice-kaldir").checked:S.iceKaldir!==false)?kaldirilacakKodlar(P):[];
   const d=mod==="degistir"?Object.assign(BOS(),{kurumlar:[]}):clone(mevcut);
+  if(kaldir.length){ d.hisseler=d.hisseler.filter(h=>!kaldir.includes(h.kod)); d.islemler=d.islemler.filter(x=>!kaldir.includes(x.kod)); }
   if(mod==="degistir"&&kayitli){ d.elleFiyat=mevcut.elleFiyat||{}; d.ayarlar=clone(mevcut.ayarlar||BOS().ayarlar); }
   if(P.ayarlar) d.ayarlar=Object.assign(d.ayarlar||{},P.ayarlar);
   // brokers: file tables win for the same name
@@ -996,11 +1107,41 @@ async function iceUygula(btn){
   if(!d.kurumlar.length) d.kurumlar=BOS().kurumlar;
   d.ornek=false;
   S.defter=d; S.demo=false; S.ice=null; renderModal();
-  commit(`${eklenen} işlem${yeniKod.length?`, ${yeniKod.length} kod`:""} yüklendi${atlanan?` · ${atlanan} tekrar eden işlem atlandı`:""}`);
+  commit(`${eklenen} işlem${yeniKod.length?`, ${yeniKod.length} kod`:""} yüklendi${atlanan?` · ${atlanan} tekrar eden işlem atlandı`:""}${kaldir.length?` · ${kaldir.join(", ")} kaldırıldı`:""}`);
   for(const h of d.hisseler) ensureSembol(h.kod,h.tip||"Hisse");
 }
 
 /* ---------- desktop-only screens and actions ---------- */
+// Sending accounts the report can go out from. Each needs an app password (a separate password made for one app);
+// Outlook/Hotmail no longer accept passwords from apps at all, so they can receive the report but not send it.
+const SAGLAYICI={
+  gmail:{ad:"Gmail",host:"smtp.gmail.com",port:465,secure:true,link:"https://myaccount.google.com/apppasswords",linkAd:"Google uygulama şifreleri sayfasını aç",
+    adim:["Google hesabında <b>2 adımlı doğrulamayı</b> aç (Google Hesabı → Güvenlik).","{link}, bir ad yaz (örneğin \"Portföy Defteri\") ve <b>Oluştur</b>'a bas.","Gösterilen <b>16 harfli şifreyi</b> aşağıdaki \"Uygulama şifresi\" kutusuna yaz. Boşluklu ya da boşluksuz yazabilirsin."]},
+  yandex:{ad:"Yandex",host:"smtp.yandex.com",port:465,secure:true,link:"https://id.yandex.com.tr/security",linkAd:"Yandex ID güvenlik sayfasını aç",
+    adim:["{link}; <b>Verilerinize erişim → Uygulama şifreleri</b> bölümüne gir.","<b>Posta</b> türünde yeni bir şifre oluştur, bir ad ver ve <b>İleri</b>'ye bas. Şifre yalnızca bir kez gösterilir; çalışmaya başlaması birkaç saat sürebilir.","Gösterilen şifreyi aşağıdaki \"Uygulama şifresi\" kutusuna, kullanıcı olarak da Yandex e-posta adresinin tamamını yaz."]},
+  icloud:{ad:"iCloud (Apple)",host:"smtp.mail.me.com",port:587,secure:false,link:"https://account.apple.com",linkAd:"Apple Hesabı sayfasını aç",
+    adim:["{link} ve Apple Hesabınla giriş yap (2 adımlı doğrulama açık olmalı).","<b>Oturum Açma ve Güvenlik → Uygulamaya özel parolalar</b> bölümünden yeni bir parola oluştur.","Gösterilen parolayı aşağıdaki \"Uygulama şifresi\" kutusuna, kullanıcı olarak da @icloud.com adresinin tamamını yaz."]},
+  yahoo:{ad:"Yahoo",host:"smtp.mail.yahoo.com",port:465,secure:true,link:"https://login.yahoo.com/account/security",linkAd:"Yahoo hesap güvenliği sayfasını aç",
+    adim:["{link}.","<b>Uygulama şifresi oluştur</b>'a bas, bir ad ver.","Gösterilen şifreyi aşağıdaki \"Uygulama şifresi\" kutusuna yaz."]},
+  outlook:{ad:"Outlook / Hotmail",yok:true},
+  diger:{ad:"Diğer (iş yeri, kendi alan adın)"}
+};
+function saglayiciBul(host){ const h=String(host||"").toLowerCase(); return Object.keys(SAGLAYICI).find(k=>SAGLAYICI[k].host===h)||(/outlook|hotmail|office365|live\.com/.test(h)?"outlook":"diger"); }
+function saglayiciYardim(k){
+  const v=SAGLAYICI[k]||SAGLAYICI.diger;
+  if(v.yok) return `<div class="prose" style="max-width:none"><p style="max-width:none"><b>Outlook ve Hotmail hesaplarından gönderilemiyor.</b> Microsoft, bu hesaplarda uygulamaların şifreyle e-posta göndermesini kapattı.</p>
+    <p style="max-width:none">Raporu yine Outlook ya da Hotmail adresine alabilirsin: yukarıdaki "Raporun gideceği e-posta" kutusuna o adresi yaz. Gönderen için listeden <b>Gmail</b>, <b>Yandex</b>, <b>iCloud</b> ya da <b>Yahoo</b> seç; hesabın yoksa yalnızca rapor göndermek için ücretsiz bir Gmail ya da Yandex hesabı açabilirsin.</p></div>`;
+  if(!v.adim) return `<div class="prose" style="max-width:none"><p style="max-width:none"><b>E-posta sağlayıcının giden posta (SMTP) bilgilerini yaz.</b> Sunucu adı, port ve SSL bilgisini sağlayıcının ya da iş yerinin yardım sayfasında bulabilirsin (genellikle port 465 ve SSL açık, ya da port 587 ve SSL kapalı).</p>
+    <p style="max-width:none">Birçok sağlayıcı normal şifre yerine <b>uygulama şifresi</b> ister; hesap ayarlarında "uygulama şifresi" ya da "uygulamaya özel parola" diye geçer. Normal şifren kabul edilmezse oradan bir tane oluştur.</p></div>`;
+  return `<div class="prose" style="max-width:none"><p style="max-width:none"><b>${esc(v.ad)} için normal şifreni yazma.</b> ${esc(v.ad)}, uygulamaların normal şifreyle e-posta göndermesine izin vermez; bunun için ayrı bir <b>uygulama şifresi</b> gerekir:</p>
+    <ol style="margin:6px 0 6px 20px;padding:0">${v.adim.map(a=>`<li>${a.replace("{link}",`<a href="${v.link}" target="_blank" rel="noopener noreferrer">${esc(v.linkAd)} ↗</a>`)}</li>`).join("")}</ol>
+    <p class="small" style="max-width:none">Şifre bu bilgisayarın güvenli anahtar deposunda şifrelenerek saklanır ve yalnızca raporu göndermek için kullanılır.</p></div>`;
+}
+// Picking a provider fills in its server settings and shows its own steps.
+document.addEventListener("change",ev=>{ if(ev.target.id!=="d-saglayici") return; const k=ev.target.value, v=SAGLAYICI[k]||{};
+  const y=$("#eposta-yardim"); if(y) y.innerHTML=saglayiciYardim(k);
+  if(v.host){ $("#d-host").value=v.host; $("#d-port").value=v.port; $("#d-secure").checked=!!v.secure; }
+  else if(k==="diger"&&Object.values(SAGLAYICI).some(x=>x.host===$("#d-host").value)){ $("#d-host").value=""; } });
 function vRaporDesktop(){
   const ds=S.ds||{}; const sm=ds.smtp||{}; const d=S.durum;
   return `<section class="panel"><div class="panel-h"><h2>Her sabah fiyat güncellemesi ve e-posta raporu</h2>${ds.raporAktif?`<span class="pill ok">Rapor açık · ${esc(maskEmail(ds.raporEmail))}</span>`:`<span class="pill neutral">Rapor kapalı</span>`}</div>
@@ -1010,12 +1151,14 @@ function vRaporDesktop(){
     <label class="check" for="d-haftaici" style="align-self:center"><input type="checkbox" id="d-haftaici" ${ds.haftaIci!==false?"checked":""}><span>Yalnızca hafta içi</span></label>
     <label class="check wide" for="d-aktif"><input type="checkbox" id="d-aktif" ${ds.raporAktif?"checked":""}><span><b>Raporu e-postayla gönder.</b> Rapor; portföy değeri, günlük değişim, pozisyonlar, hedef/stop uyarıları ve kayıt kontrollerini içerir. Yalnızca aşağıdaki adrese gider.</span></label>
     <div class="field wide" style="max-width:420px"><label for="d-email">Raporun gideceği e-posta</label><input id="d-email" type="email" value="${esc(ds.raporEmail||"")}" placeholder="ornek@eposta.com" maxlength="120"></div>
-    <div class="field wide"><h3 style="margin-top:6px">Gönderen e-posta hesabı (SMTP)</h3><span class="hint">Gmail için: Google hesabında 2 adımlı doğrulamayı aç, "Uygulama şifreleri"nden bu uygulama için bir şifre oluştur ve onu yaz. Normal Gmail şifreni yazma. Şifre bu bilgisayarın güvenli anahtar deposunda şifrelenerek saklanır.</span></div>
+    <div class="field wide"><h3 style="margin-top:6px">Gönderen e-posta hesabı</h3><span class="hint">Raporu gönderecek hesap. Rapor yukarıdaki adrese gider; o adres herhangi bir e-posta olabilir (Outlook, Hotmail, iş adresi…).</span></div>
+    <div class="field"><label for="d-saglayici">E-posta sağlayıcısı</label><select id="d-saglayici">${Object.entries(SAGLAYICI).map(([k,v])=>`<option value="${k}" ${k===saglayiciBul(sm.host||"smtp.gmail.com")?"selected":""}>${esc(v.ad)}</option>`).join("")}</select></div>
+    <div class="banner warn" id="eposta-yardim" style="grid-column:1/-1;display:block">${saglayiciYardim(saglayiciBul(sm.host||"smtp.gmail.com"))}</div>
     <div class="field"><label for="d-host">Sunucu</label><input id="d-host" value="${esc(sm.host||"smtp.gmail.com")}" maxlength="200"></div>
     <div class="field"><label for="d-port">Port</label><input id="d-port" inputmode="numeric" value="${esc(sm.port||465)}"></div>
     <label class="check" for="d-secure" style="align-self:center"><input type="checkbox" id="d-secure" ${sm.secure!==false?"checked":""}><span>SSL/TLS (465)</span></label>
     <div class="field"><label for="d-user">Kullanıcı (e-posta)</label><input id="d-user" value="${esc(sm.user||"")}" maxlength="200" autocomplete="off"></div>
-    <div class="field"><label for="d-pass">Uygulama şifresi</label><input id="d-pass" type="password" value="" placeholder="${sm.hasPass?"kayıtlı · değiştirmek için yaz":"şifre"}" autocomplete="new-password"></div>
+    <div class="field"><label for="d-pass">Uygulama şifresi</label><input id="d-pass" type="password" value="" placeholder="${sm.hasPass?"kayıtlı · değiştirmek için yaz":"uygulama şifresi"}" autocomplete="new-password"></div>
     <div class="form-actions"><button class="btn primary" type="submit">Kaydet</button><button class="btn" type="button" data-act="mail-test" ${sm.hasPass?"":"disabled"}>Test raporu gönder</button><button class="btn" type="button" data-act="sabah-simdi">Sabah işini şimdi çalıştır</button><span class="small" id="d-msg"></span></div>
   </form></section>
   <section class="panel"><h3>Uygulama</h3>
@@ -1065,8 +1208,8 @@ async function raporOlustur(){
     ${hareket.length?`<p style="margin-top:16px"><b>En çok yükselen:</b> ${hareket.slice(0,3).map(p=>esc(p.kod)+" "+PCT(p.gunlukYuzde)).join(", ")}<br><b>En çok düşen:</b> ${hareket.slice(-3).reverse().map(p=>esc(p.kod)+" "+PCT(p.gunlukYuzde)).join(", ")}</p>`:""}
     ${alarmlar.length?`<p><b>Hedef / stop uyarıları:</b><br>${alarmlar.map(p=>esc(p.kod)+": "+esc(p.alarm.msg)).join("<br>")}</p>`:""}
     ${c.uyarilar.filter(u=>u.lvl!=="ok").length?`<p><b>Kontrol etmen gerekenler:</b><br>${c.uyarilar.filter(u=>u.lvl!=="ok").map(u=>esc(u.kod)+": "+esc(u.msg)).join("<br>")}</p>`:""}
-    ${(c.temettuOneri||[]).length?`<p><b>Bulunan temettüler:</b> ${c.temettuOneri.map(t=>esc(t.kod)+" "+fmtDate(t.tarih)+" ≈ "+TL(t.net)).join(", ")}. Uygulamadan onaylayıp deftere ekleyebilirsin.</p>`:""}
-    <p style="font-size:12px;color:${m}">Gerçekleşen K/Z ${TLs(T.gerceklesen)} · Net temettü ${TL(T.temettu)} · Ödenen komisyon ${TL(T.komisyon)} · Toplam sonuç ${TLs(T.sonuc)}<br>Kâr/zarar ortalama alış fiyatına göredir, komisyon dahil değildir.</p>
+    ${(c.temettuOneri||[]).length?`<p><b>Onay bekleyen ${c.temettuOneri.length} temettü:</b> ${c.temettuOneri.slice(0,5).map(t=>esc(t.kod)+" "+fmtDate(t.tarih)+" ≈ "+TL(t.net)).join(", ")}${c.temettuOneri.length>5?` ve ${c.temettuOneri.length-5} tane daha`:""}. Uygulamadan onaylayıp deftere ekleyebilirsin.</p>`:""}
+    <p style="font-size:12px;color:${m}">Gerçekleşen K/Z ${TLs(T.gerceklesen)} · Net temettü ${TL(T.temettu)} · Ödenen komisyon ${TL(T.komisyon)} · Toplam sonuç ${TLs(T.sonuc)}<br>Kâr/zarar ${esc(yontemAdi(S.defter.ayarlar))} hesaplanır, komisyon dahil değildir.</p>
     <p style="font-size:11px;color:${m};margin-top:20px">Bu rapor bilgilendirme amaçlıdır, yatırım tavsiyesi değildir. Bilgisayarındaki Portföy Defteri uygulaması tarafından hazırlandı; raporu uygulamanın "Günlük rapor" sekmesinden kapatabilirsin.</p></div>`;
   const text=[`Portföy Defteri · ${tarih}`,`Fiyatlar: ${fiyatGunu}`,`Portföy değeri: ${TL(T.deger)} · Günlük: ${TLs(T.gunluk)} (${PCT(T.gunlukYuzde)}) · K/Z: ${TLs(T.kz)} (${PCT(T.kzYuzde)})`,"",
     ...elde.map(p=>`${p.kod}: ${LOT(p.lot)} lot · fiyat ${p.f?PX(p.f.fiyat):"—"} (${not(p)}) · değer ${TL(p.deger)} · K/Z ${TLs(p.kz)}`),"",

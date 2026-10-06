@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { Store } = require('./src/store');
 const prices = require('./src/prices');
 const zamanlama = require('./src/zamanlama');
+const { epostaHatasi } = require('./src/eposta');
 // Tests can replace internet access with recorded responses (never set in normal use).
 const sahteAg = process.env.PD_TEST_FIXTURES ? require('./src/test-fetch')(process.env.PD_TEST_FIXTURES) : null;
 const agFetch = (u, o) => sahteAg ? sahteAg(u, o) : fetcher.fetch(u, o);
@@ -66,7 +67,9 @@ function applySettings(patch) {
     if (typeof s.from === 'string') settings.smtp.from = s.from.trim().slice(0, 200);
     if (s.pass === null) settings.smtp.passEnc = '';
     if (typeof s.pass === 'string' && s.pass) {
-      if (safeStorage.isEncryptionAvailable()) settings.smtp.passEnc = safeStorage.encryptString(s.pass).toString('base64');
+      // Google shows app passwords in groups of four ("abcd efgh ijkl mnop"); the spaces are not part of the password
+      const pass = /(^|\.)(gmail|googlemail)\.com$/i.test(settings.smtp.host) ? s.pass.replace(/\s+/g, '') : s.pass;
+      if (safeStorage.isEncryptionAvailable()) settings.smtp.passEnc = safeStorage.encryptString(pass).toString('base64');
       else { saveSettings(); throw new Error('Diğer ayarlar kaydedildi, ama bu bilgisayarda güvenli anahtar deposu olmadığı için e-posta şifresi kaydedilmedi.'); }
     }
   }
@@ -177,8 +180,10 @@ async function mailGonder({ subject, html, text }) {
   if (!s.host || !s.user || !s.passEnc) throw new Error('E-posta sunucusu ayarları eksik.');
   const nodemailer = require('nodemailer');
   const pass = safeStorage.decryptString(Buffer.from(s.passEnc, 'base64'));
-  const tr = nodemailer.createTransport({ host: s.host, port: s.port, secure: !!s.secure, auth: { user: s.user, pass }, connectionTimeout: 15000 });
-  await tr.sendMail({ from: s.from || s.user, to: settings.raporEmail, subject, html, text });
+  // port 587 starts plain and must switch to TLS before the password is sent
+  const tr = nodemailer.createTransport({ host: s.host, port: s.port, secure: !!s.secure, requireTLS: !s.secure && +s.port === 587, auth: { user: s.user, pass }, connectionTimeout: 15000 });
+  try { await tr.sendMail({ from: s.from || s.user, to: settings.raporEmail, subject, html, text }); }
+  catch (e) { throw new Error(epostaHatasi(e, s.host)); }
 }
 async function sabahGorevi(neden, { raporuErtele = false } = {}) {
   let r;

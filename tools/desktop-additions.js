@@ -1,4 +1,34 @@
 /* ---------- desktop-only screens and actions ---------- */
+// Sending accounts the report can go out from. Each needs an app password (a separate password made for one app);
+// Outlook/Hotmail no longer accept passwords from apps at all, so they can receive the report but not send it.
+const SAGLAYICI={
+  gmail:{ad:"Gmail",host:"smtp.gmail.com",port:465,secure:true,link:"https://myaccount.google.com/apppasswords",linkAd:"Google uygulama şifreleri sayfasını aç",
+    adim:["Google hesabında <b>2 adımlı doğrulamayı</b> aç (Google Hesabı → Güvenlik).","{link}, bir ad yaz (örneğin \"Portföy Defteri\") ve <b>Oluştur</b>'a bas.","Gösterilen <b>16 harfli şifreyi</b> aşağıdaki \"Uygulama şifresi\" kutusuna yaz. Boşluklu ya da boşluksuz yazabilirsin."]},
+  yandex:{ad:"Yandex",host:"smtp.yandex.com",port:465,secure:true,link:"https://id.yandex.com.tr/security",linkAd:"Yandex ID güvenlik sayfasını aç",
+    adim:["{link}; <b>Verilerinize erişim → Uygulama şifreleri</b> bölümüne gir.","<b>Posta</b> türünde yeni bir şifre oluştur, bir ad ver ve <b>İleri</b>'ye bas. Şifre yalnızca bir kez gösterilir; çalışmaya başlaması birkaç saat sürebilir.","Gösterilen şifreyi aşağıdaki \"Uygulama şifresi\" kutusuna, kullanıcı olarak da Yandex e-posta adresinin tamamını yaz."]},
+  icloud:{ad:"iCloud (Apple)",host:"smtp.mail.me.com",port:587,secure:false,link:"https://account.apple.com",linkAd:"Apple Hesabı sayfasını aç",
+    adim:["{link} ve Apple Hesabınla giriş yap (2 adımlı doğrulama açık olmalı).","<b>Oturum Açma ve Güvenlik → Uygulamaya özel parolalar</b> bölümünden yeni bir parola oluştur.","Gösterilen parolayı aşağıdaki \"Uygulama şifresi\" kutusuna, kullanıcı olarak da @icloud.com adresinin tamamını yaz."]},
+  yahoo:{ad:"Yahoo",host:"smtp.mail.yahoo.com",port:465,secure:true,link:"https://login.yahoo.com/account/security",linkAd:"Yahoo hesap güvenliği sayfasını aç",
+    adim:["{link}.","<b>Uygulama şifresi oluştur</b>'a bas, bir ad ver.","Gösterilen şifreyi aşağıdaki \"Uygulama şifresi\" kutusuna yaz."]},
+  outlook:{ad:"Outlook / Hotmail",yok:true},
+  diger:{ad:"Diğer (iş yeri, kendi alan adın)"}
+};
+function saglayiciBul(host){ const h=String(host||"").toLowerCase(); return Object.keys(SAGLAYICI).find(k=>SAGLAYICI[k].host===h)||(/outlook|hotmail|office365|live\.com/.test(h)?"outlook":"diger"); }
+function saglayiciYardim(k){
+  const v=SAGLAYICI[k]||SAGLAYICI.diger;
+  if(v.yok) return `<div class="prose" style="max-width:none"><p style="max-width:none"><b>Outlook ve Hotmail hesaplarından gönderilemiyor.</b> Microsoft, bu hesaplarda uygulamaların şifreyle e-posta göndermesini kapattı.</p>
+    <p style="max-width:none">Raporu yine Outlook ya da Hotmail adresine alabilirsin: yukarıdaki "Raporun gideceği e-posta" kutusuna o adresi yaz. Gönderen için listeden <b>Gmail</b>, <b>Yandex</b>, <b>iCloud</b> ya da <b>Yahoo</b> seç; hesabın yoksa yalnızca rapor göndermek için ücretsiz bir Gmail ya da Yandex hesabı açabilirsin.</p></div>`;
+  if(!v.adim) return `<div class="prose" style="max-width:none"><p style="max-width:none"><b>E-posta sağlayıcının giden posta (SMTP) bilgilerini yaz.</b> Sunucu adı, port ve SSL bilgisini sağlayıcının ya da iş yerinin yardım sayfasında bulabilirsin (genellikle port 465 ve SSL açık, ya da port 587 ve SSL kapalı).</p>
+    <p style="max-width:none">Birçok sağlayıcı normal şifre yerine <b>uygulama şifresi</b> ister; hesap ayarlarında "uygulama şifresi" ya da "uygulamaya özel parola" diye geçer. Normal şifren kabul edilmezse oradan bir tane oluştur.</p></div>`;
+  return `<div class="prose" style="max-width:none"><p style="max-width:none"><b>${esc(v.ad)} için normal şifreni yazma.</b> ${esc(v.ad)}, uygulamaların normal şifreyle e-posta göndermesine izin vermez; bunun için ayrı bir <b>uygulama şifresi</b> gerekir:</p>
+    <ol style="margin:6px 0 6px 20px;padding:0">${v.adim.map(a=>`<li>${a.replace("{link}",`<a href="${v.link}" target="_blank" rel="noopener noreferrer">${esc(v.linkAd)} ↗</a>`)}</li>`).join("")}</ol>
+    <p class="small" style="max-width:none">Şifre bu bilgisayarın güvenli anahtar deposunda şifrelenerek saklanır ve yalnızca raporu göndermek için kullanılır.</p></div>`;
+}
+// Picking a provider fills in its server settings and shows its own steps.
+document.addEventListener("change",ev=>{ if(ev.target.id!=="d-saglayici") return; const k=ev.target.value, v=SAGLAYICI[k]||{};
+  const y=$("#eposta-yardim"); if(y) y.innerHTML=saglayiciYardim(k);
+  if(v.host){ $("#d-host").value=v.host; $("#d-port").value=v.port; $("#d-secure").checked=!!v.secure; }
+  else if(k==="diger"&&Object.values(SAGLAYICI).some(x=>x.host===$("#d-host").value)){ $("#d-host").value=""; } });
 function vRaporDesktop(){
   const ds=S.ds||{}; const sm=ds.smtp||{}; const d=S.durum;
   return `<section class="panel"><div class="panel-h"><h2>Her sabah fiyat güncellemesi ve e-posta raporu</h2>${ds.raporAktif?`<span class="pill ok">Rapor açık · ${esc(maskEmail(ds.raporEmail))}</span>`:`<span class="pill neutral">Rapor kapalı</span>`}</div>
@@ -8,12 +38,14 @@ function vRaporDesktop(){
     <label class="check" for="d-haftaici" style="align-self:center"><input type="checkbox" id="d-haftaici" ${ds.haftaIci!==false?"checked":""}><span>Yalnızca hafta içi</span></label>
     <label class="check wide" for="d-aktif"><input type="checkbox" id="d-aktif" ${ds.raporAktif?"checked":""}><span><b>Raporu e-postayla gönder.</b> Rapor; portföy değeri, günlük değişim, pozisyonlar, hedef/stop uyarıları ve kayıt kontrollerini içerir. Yalnızca aşağıdaki adrese gider.</span></label>
     <div class="field wide" style="max-width:420px"><label for="d-email">Raporun gideceği e-posta</label><input id="d-email" type="email" value="${esc(ds.raporEmail||"")}" placeholder="ornek@eposta.com" maxlength="120"></div>
-    <div class="field wide"><h3 style="margin-top:6px">Gönderen e-posta hesabı (SMTP)</h3><span class="hint">Gmail için: Google hesabında 2 adımlı doğrulamayı aç, "Uygulama şifreleri"nden bu uygulama için bir şifre oluştur ve onu yaz. Normal Gmail şifreni yazma. Şifre bu bilgisayarın güvenli anahtar deposunda şifrelenerek saklanır.</span></div>
+    <div class="field wide"><h3 style="margin-top:6px">Gönderen e-posta hesabı</h3><span class="hint">Raporu gönderecek hesap. Rapor yukarıdaki adrese gider; o adres herhangi bir e-posta olabilir (Outlook, Hotmail, iş adresi…).</span></div>
+    <div class="field"><label for="d-saglayici">E-posta sağlayıcısı</label><select id="d-saglayici">${Object.entries(SAGLAYICI).map(([k,v])=>`<option value="${k}" ${k===saglayiciBul(sm.host||"smtp.gmail.com")?"selected":""}>${esc(v.ad)}</option>`).join("")}</select></div>
+    <div class="banner warn" id="eposta-yardim" style="grid-column:1/-1;display:block">${saglayiciYardim(saglayiciBul(sm.host||"smtp.gmail.com"))}</div>
     <div class="field"><label for="d-host">Sunucu</label><input id="d-host" value="${esc(sm.host||"smtp.gmail.com")}" maxlength="200"></div>
     <div class="field"><label for="d-port">Port</label><input id="d-port" inputmode="numeric" value="${esc(sm.port||465)}"></div>
     <label class="check" for="d-secure" style="align-self:center"><input type="checkbox" id="d-secure" ${sm.secure!==false?"checked":""}><span>SSL/TLS (465)</span></label>
     <div class="field"><label for="d-user">Kullanıcı (e-posta)</label><input id="d-user" value="${esc(sm.user||"")}" maxlength="200" autocomplete="off"></div>
-    <div class="field"><label for="d-pass">Uygulama şifresi</label><input id="d-pass" type="password" value="" placeholder="${sm.hasPass?"kayıtlı · değiştirmek için yaz":"şifre"}" autocomplete="new-password"></div>
+    <div class="field"><label for="d-pass">Uygulama şifresi</label><input id="d-pass" type="password" value="" placeholder="${sm.hasPass?"kayıtlı · değiştirmek için yaz":"uygulama şifresi"}" autocomplete="new-password"></div>
     <div class="form-actions"><button class="btn primary" type="submit">Kaydet</button><button class="btn" type="button" data-act="mail-test" ${sm.hasPass?"":"disabled"}>Test raporu gönder</button><button class="btn" type="button" data-act="sabah-simdi">Sabah işini şimdi çalıştır</button><span class="small" id="d-msg"></span></div>
   </form></section>
   <section class="panel"><h3>Uygulama</h3>
@@ -63,8 +95,8 @@ async function raporOlustur(){
     ${hareket.length?`<p style="margin-top:16px"><b>En çok yükselen:</b> ${hareket.slice(0,3).map(p=>esc(p.kod)+" "+PCT(p.gunlukYuzde)).join(", ")}<br><b>En çok düşen:</b> ${hareket.slice(-3).reverse().map(p=>esc(p.kod)+" "+PCT(p.gunlukYuzde)).join(", ")}</p>`:""}
     ${alarmlar.length?`<p><b>Hedef / stop uyarıları:</b><br>${alarmlar.map(p=>esc(p.kod)+": "+esc(p.alarm.msg)).join("<br>")}</p>`:""}
     ${c.uyarilar.filter(u=>u.lvl!=="ok").length?`<p><b>Kontrol etmen gerekenler:</b><br>${c.uyarilar.filter(u=>u.lvl!=="ok").map(u=>esc(u.kod)+": "+esc(u.msg)).join("<br>")}</p>`:""}
-    ${(c.temettuOneri||[]).length?`<p><b>Bulunan temettüler:</b> ${c.temettuOneri.map(t=>esc(t.kod)+" "+fmtDate(t.tarih)+" ≈ "+TL(t.net)).join(", ")}. Uygulamadan onaylayıp deftere ekleyebilirsin.</p>`:""}
-    <p style="font-size:12px;color:${m}">Gerçekleşen K/Z ${TLs(T.gerceklesen)} · Net temettü ${TL(T.temettu)} · Ödenen komisyon ${TL(T.komisyon)} · Toplam sonuç ${TLs(T.sonuc)}<br>Kâr/zarar ortalama alış fiyatına göredir, komisyon dahil değildir.</p>
+    ${(c.temettuOneri||[]).length?`<p><b>Onay bekleyen ${c.temettuOneri.length} temettü:</b> ${c.temettuOneri.slice(0,5).map(t=>esc(t.kod)+" "+fmtDate(t.tarih)+" ≈ "+TL(t.net)).join(", ")}${c.temettuOneri.length>5?` ve ${c.temettuOneri.length-5} tane daha`:""}. Uygulamadan onaylayıp deftere ekleyebilirsin.</p>`:""}
+    <p style="font-size:12px;color:${m}">Gerçekleşen K/Z ${TLs(T.gerceklesen)} · Net temettü ${TL(T.temettu)} · Ödenen komisyon ${TL(T.komisyon)} · Toplam sonuç ${TLs(T.sonuc)}<br>Kâr/zarar ${esc(yontemAdi(S.defter.ayarlar))} hesaplanır, komisyon dahil değildir.</p>
     <p style="font-size:11px;color:${m};margin-top:20px">Bu rapor bilgilendirme amaçlıdır, yatırım tavsiyesi değildir. Bilgisayarındaki Portföy Defteri uygulaması tarafından hazırlandı; raporu uygulamanın "Günlük rapor" sekmesinden kapatabilirsin.</p></div>`;
   const text=[`Portföy Defteri · ${tarih}`,`Fiyatlar: ${fiyatGunu}`,`Portföy değeri: ${TL(T.deger)} · Günlük: ${TLs(T.gunluk)} (${PCT(T.gunlukYuzde)}) · K/Z: ${TLs(T.kz)} (${PCT(T.kzYuzde)})`,"",
     ...elde.map(p=>`${p.kod}: ${LOT(p.lot)} lot · fiyat ${p.f?PX(p.f.fiyat):"—"} (${not(p)}) · değer ${TL(p.deger)} · K/Z ${TLs(p.kz)}`),"",
