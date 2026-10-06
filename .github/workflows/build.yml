@@ -50,9 +50,21 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $kur = (Get-ChildItem dist\*.exe | Select-Object -First 1).FullName
-          Start-Process -Wait -FilePath $kur -ArgumentList '/S'
-          $exe = (Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter PortfoyDefteri.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          $kur = (Get-ChildItem dist\*.exe | Sort-Object Length -Descending | Select-Object -First 1).FullName
+          $bul = { (Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter PortfoyDefteri.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }
+          # The silent installer can hand the copying to a child process and return early: wait for the program to appear,
+          # and try the installation a second time before giving up.
+          $exe = $null; $cikis = @()
+          foreach ($deneme in 1..2) {
+            $p = Start-Process -FilePath $kur -ArgumentList '/S' -Wait -PassThru
+            $cikis += $p.ExitCode
+            foreach ($i in 1..60) { $exe = & $bul; if ($exe) { break }; Start-Sleep -Seconds 2 }
+            if ($exe) { break }
+          }
+          if (-not $exe) {
+            $liste = (Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 40 | ForEach-Object { $_.FullName }) -join "`n"
+            "## Kurulum (Windows) — program bulunamadı`n`nKurulum programının çıkış kodları: $($cikis -join ', ')`n`ndist: $((Get-ChildItem dist -File | ForEach-Object { $_.Name }) -join ', ')`n`n``````n$liste`n``````n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
           $masaustu = Test-Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Portföy Defteri.lnk')
           $baslat = [bool](Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" -Recurse -Filter 'Portföy Defteri.lnk' -ErrorAction SilentlyContinue)
           "## Kurulum (Windows)`n`n- Kurulum dosyası: $(Split-Path $kur -Leaf)`n- Kurulan program: $exe`n- Masaüstü kısayolu: $(if ($masaustu) {'var'} else {'YOK'})`n- Başlat menüsü kısayolu: $(if ($baslat) {'var'} else {'YOK'})`n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
